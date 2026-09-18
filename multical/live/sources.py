@@ -246,6 +246,8 @@ class PySpinSource:
             state['settings'] = dict(pixel_format=self._get(nm, 'PixelFormat', 'Enumeration'),
                                      offset_x=self._get(nm, 'OffsetX', 'Integer'),
                                      offset_y=self._get(nm, 'OffsetY', 'Integer'),
+                                     reverse_x=self._get(nm, 'ReverseX', 'Boolean'),
+                                     reverse_y=self._get(nm, 'ReverseY', 'Boolean'),
                                      exposure_auto='Off', gain_auto='Off')
             cam.BeginAcquisition()
             state['acquiring'] = True

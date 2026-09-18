@@ -1,4 +1,5 @@
 """Calibrate a frozen live-session snapshot in a separate process."""
+import copy
 import cv2
 import numpy as np
 from cached_property import cached_property
@@ -8,6 +9,7 @@ from structs.struct import struct
 from multical import tables
 from multical.board import load_config
 from multical.camera import Camera
+from multical.io.interop import validate_seed_geometry
 from multical.motion.static_frames import StaticFrames
 from multical.optimization.calibration import Calibration
 from multical.optimization.parameters import ParamList
@@ -100,7 +102,7 @@ def validate(board, records, serials, cameras, camera_poses):
     return {s: dict(**stats(errors[s]), expected_points=expected[s], failed_points=failures[s]) for s in serials}
 
 
-def solve_snapshot(board_file, serials, records, progress=lambda message: None, max_iterations=100):
+def solve_snapshot(board_file, serials, records, progress=lambda message: None, max_iterations=100, seed=None):
     cv2.setNumThreads(1)
     board_map = load_config(board_file)
     if len(board_map) != 1:
@@ -108,23 +110,42 @@ def solve_snapshot(board_file, serials, records, progress=lambda message: None, 
     board_name, board = next(iter(board_map.items()))
     training = [r for r in records if r['role'] == 'training']
     validation = [r for r in records if r['role'] == 'validation']
+    if seed is not None:
+        for record in records:
+            validate_seed_geometry(seed, serials, {s: record['frames'][s]['image_size'] for s in serials})
+        if not records:
+            raise ValueError('Capture validation or training poses to check the seed')
+        seed_cameras = [Camera(seed['cameras'][s]['image_size'], np.array(seed['cameras'][s]['K']),
+                               np.array(seed['cameras'][s]['dist'])) for s in serials]
+        seed_poses = np.array([seed['camera_poses'][s] for s in serials])
+        if not training:
+            result = copy.deepcopy(seed)
+            result.update(training={}, training_ids=[], validation_ids=[r['id'] for r in validation],
+                          accuracy_status='unverified',
+                          validation=validate(board, validation, serials, seed_cameras, seed_poses),
+                          solver=dict(success=True, mode='validation_only', message='Seed unchanged; no optimization'))
+            return result
     if not training:
         raise ValueError('Capture training poses before solving')
     detections = _detections(training, serials)
     cameras, intrinsic_errors = [], {}
     for index, serial in enumerate(serials):
         count = sum(board.has_min_detections(d[0]) for d in detections[index])
-        if count < 12:
-            raise ValueError(f'{serial}: {count}/12 usable training views. Add varied board poses before solving.')
+        minimum = 3 if seed is not None else 12
+        if count < minimum:
+            raise ValueError(f'{serial}: {count}/{minimum} usable training views. Add varied board poses before solving.')
         sizes = {tuple(r['frames'][serial]['image_size']) for r in records}
         if len(sizes) != 1:
             raise ValueError(f'{serial}: image geometry changed')
-        progress(f'Intrinsics {index+1}/{len(serials)} · {serial} · {count} views')
-        camera, error = Camera.calibrate([board], .5, detections[index], sizes.pop(), max_iter=80, eps=1e-8)
+        if seed is not None:
+            camera, error = seed_cameras[index], None
+        else:
+            progress(f'Intrinsics {index+1}/{len(serials)} · {serial} · {count} views')
+            camera, error = Camera.calibrate([board], .5, detections[index], sizes.pop(), max_iter=80, eps=1e-8)
         if not np.isfinite(camera.param_vec).all() or min(camera.focal_length) <= 0:
             raise ValueError(f'{serial}: invalid intrinsic fit')
         cameras.append(camera)
-        intrinsic_errors[serial] = float(error)
+        intrinsic_errors[serial] = float(error) if error is not None else None
     point_table = tables.make_point_table(detections, [board])
     pose_table = tables.make_pose_table(point_table, [board], cameras, True, 2.0)
     overlaps = tables.pattern_overlaps(pose_table)
@@ -139,7 +160,20 @@ def solve_snapshot(board_file, serials, records, progress=lambda message: None, 
         missing = [s for i, s in enumerate(serials) if i not in reached]
         raise ValueError('Disconnected camera observations: ' + ', '.join(missing) + '. Capture shared board poses.')
     progress('Initializing connected camera and board poses')
-    initial = tables.initialise_poses(pose_table)
+    if seed is None:
+        initial = tables.initialise_poses(pose_table)
+    else:
+        # Reuse the supplied world frame. Stock initialise_poses estimates a camera
+        # tree even with a seed; one-board initialization only needs C^-1 @ boardPnP.
+        times = []
+        for ti in range(len(training)):
+            available = np.flatnonzero(pose_table.valid[:, ti, 0])
+            if not available.size:
+                raise ValueError(f'No usable board pose for training frame {training[ti]["id"]}')
+            ci = max(available, key=lambda i: pose_table.num_points[i, ti, 0])
+            times.append(np.linalg.inv(seed_poses[ci]) @ pose_table.poses[ci, ti, 0])
+        initial = struct(camera=Table.create(poses=seed_poses, valid=np.ones(len(serials), bool)),
+                         times=Table.create(poses=np.array(times), valid=np.ones(len(times), bool)))
     if not initial.camera.valid.all() or not initial.times.valid.all():
         raise ValueError('Initialization could not explain every training camera/frame')
     frame_names = [r['id'] for r in training]
@@ -174,13 +208,16 @@ def solve_snapshot(board_file, serials, records, progress=lambda message: None, 
                 camera_poses={s: pose.tolist() for s, pose in zip(serials, calibration.camera_poses.poses)},
                 frame_poses={r['id']: pose.tolist() for r, pose in zip(training, calibration.motion.poses)},
                 intrinsic_rms=intrinsic_errors, training=training_stats, validation=validation_stats,
-                overlaps=overlaps.tolist(), solver=calibration.solver_status)
+                overlaps=overlaps.tolist(), solver=calibration.solver_status,
+                bootstrap_source=seed.get('bootstrap_source') if seed is not None else None,
+                provenance=seed.get('provenance') if seed is not None else None,
+                seed_validation=validate(board, validation, serials, seed_cameras, seed_poses) if seed is not None else None)
 
 
-def solve_process(connection, board_file, serials, records):
+def solve_process(connection, board_file, serials, records, seed=None):
     try:
         result = solve_snapshot(board_file, serials, records,
-                                progress=lambda message: connection.send(('progress', message)))
+                                progress=lambda message: connection.send(('progress', message)), seed=seed)
         connection.send(('result', result))
     except Exception as exc:
         connection.send(('error', str(exc)))

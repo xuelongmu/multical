@@ -8,6 +8,7 @@ def main():
     parser = argparse.ArgumentParser(description='Standalone live multi-camera calibration and visual guidance')
     parser.add_argument('--boards', default=str(Path(__file__).with_name('default_board.yaml')))
     parser.add_argument('--output', default='live-sessions')
+    parser.add_argument('--seed', help='Converted Captury, multical, or live calibration JSON (metres, native images)')
     parser.add_argument('--demo', action='store_true', help='Start an explicitly labelled rendered test rig')
     parser.add_argument('--count', type=int, help='Required number of cameras (25 hardware, 4 simulated by default)')
     parser.add_argument('--serials', nargs='*', default=[], help='Explicit expected hardware serials')

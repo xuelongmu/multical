@@ -275,6 +275,28 @@ class CalibrationIntegrationTests(unittest.TestCase):
         self.assertIsNone(measured['SIM-01']['rms'])
         self.assertGreater(measured['SIM-01']['failed_points'], 0)
 
+    def test_seed_can_be_validated_without_refitting_or_training(self):
+        seed = copy.deepcopy(self.result)
+        measured = solve_snapshot(BOARD, self.source.serials, self.records[24:], seed=seed)
+        self.assertEqual(measured['solver']['mode'], 'validation_only')
+        self.assertEqual(measured['camera_poses'], seed['camera_poses'])
+        self.assertEqual(measured['cameras'], seed['cameras'])
+        self.assertEqual(measured['validation'], self.result['validation'])
+        self.assertEqual(measured['training_ids'], [])
+
+    def test_seed_refinement_fixes_intrinsics_and_preserves_nonidentity_world_anchor(self):
+        seed = copy.deepcopy(self.result)
+        world = np.eye(4)
+        world[:3, :3] = cv2.Rodrigues(np.array([.2, .1, -.3]))[0]
+        world[:3, 3] = [2, -1, .5]
+        for serial in self.source.serials:
+            seed['camera_poses'][serial] = (np.asarray(seed['camera_poses'][serial]) @ world).tolist()
+        seed['camera_poses']['SIM-04'][0][3] += .03
+        result = solve_snapshot(BOARD, self.source.serials, self.records, seed=seed, max_iterations=50)
+        self.assertEqual(result['cameras'], seed['cameras'])
+        np.testing.assert_allclose(result['camera_poses']['SIM-01'], seed['camera_poses']['SIM-01'], atol=1e-12)
+        self.assertLess(result['validation']['SIM-04']['rms'], result['seed_validation']['SIM-04']['rms']/5)
+
 
 if __name__ == '__main__':
     unittest.main()

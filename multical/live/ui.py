@@ -1,5 +1,6 @@
 """Native live visualizer. All hardware and fitting work stays off the GUI thread."""
 import math
+import json
 import multiprocessing as mp
 from pathlib import Path
 import time
@@ -9,6 +10,7 @@ import numpy as np
 from qtpy import QtCore, QtGui, QtWidgets
 
 from multical.board import load_config
+from multical.io.interop import load_seed, validate_seed_geometry
 from .calibration import solve_process
 from .engine import LiveEngine
 from .metrics import GRID, live_projection
@@ -239,7 +241,7 @@ class RigView(QtWidgets.QWidget):
             p.drawEllipse(project(pos), 7, 7)
             p.drawLine(project(pos), project(pos + world[:3, 2] * span*.15))
         p.setPen(QtGui.QColor('#9cabb9'))
-        p.drawText(12, 20, f'Relative camera frame · extent {span:.2f} m · drag to orbit, scroll to zoom')
+        p.drawText(12, 20, f'Calibration world frame · extent {span:.2f} m · drag to orbit, scroll to zoom')
 
 
 class LiveWindow(QtWidgets.QMainWindow):
@@ -249,6 +251,8 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.board_file = str(Path(args.boards).resolve())
         self.board = self._load_board(self.board_file)
         self.engine = self.result = self.process = self.connection = None
+        self.seed = load_seed(args.seed) if getattr(args, 'seed', None) else None
+        self.seed_checked = False
         self.last_packet = self.last_batch = None
         self.selected = None
         self.tiles = {}
@@ -304,6 +308,9 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.board_button = QtWidgets.QPushButton('Choose board…')
         self.board_button.clicked.connect(self.choose_board)
         controls.addWidget(self.board_button)
+        self.seed_button = QtWidgets.QPushButton('Load calibration seed…')
+        self.seed_button.clicked.connect(self.choose_seed)
+        controls.addWidget(self.seed_button)
         self.start_button = QtWidgets.QPushButton('Connect cameras')
         self.start_button.setObjectName('primary')
         self.start_button.clicked.connect(self.toggle_capture)
@@ -375,6 +382,9 @@ class LiveWindow(QtWidgets.QMainWindow):
         upper.setSizes([650, 550])
         lower = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         self.rig = RigView()
+        if self.seed:
+            self.result = self.rig.result = self.seed
+            self.solve_status.setText('Seed loaded · native images required. Capture validation to check it, or training to refine poses with fixed lenses.')
         lower.addWidget(self.rig)
         self.tabs = QtWidgets.QTabWidget()
         self.metrics = QtWidgets.QTableWidget(0, 6)
@@ -433,6 +443,18 @@ class LiveWindow(QtWidgets.QMainWindow):
             except Exception as exc:
                 self.fail(str(exc))
 
+    def choose_seed(self):
+        filename, _ = QtWidgets.QFileDialog.getOpenFileName(self, 'Calibration seed (metres, native images)', '', 'JSON (*.json)')
+        if filename:
+            try:
+                seed = load_seed(filename)
+                self.seed = self.result = self.rig.result = seed
+                self.seed_checked = False
+                self.rig.update()
+                self.solve_status.setText('Seed loaded. Capture validation to check it, or training to refine camera poses. Lens parameters stay fixed.')
+            except Exception as exc:
+                self.fail(str(exc))
+
     def toggle_capture(self):
         if self.engine and self.engine.running():
             self.engine.stop()
@@ -440,7 +462,9 @@ class LiveWindow(QtWidgets.QMainWindow):
             return
         self.error_label.hide()
         self.cancel_solve()
-        self.result = self.rig.result = self.rig.target = None
+        self.result = self.rig.result = self.seed
+        self.rig.target = None
+        self.seed_checked = False
         self.last_packet = self.last_batch = None
         for tile in self.tiles.values():
             self.wall_grid.removeWidget(tile)
@@ -534,7 +558,13 @@ class LiveWindow(QtWidgets.QMainWindow):
             return
         context = mp.get_context('spawn')
         self.connection, child = context.Pipe(duplex=False)
-        self.process = context.Process(target=solve_process, args=(child, str(session.directory / 'board.yaml'), session.serials, records))
+        if self.seed is not None and not self.seed_checked:
+            self.fail('Seed has not passed camera identity and image-geometry checks.')
+            self.connection.close()
+            child.close()
+            self.connection = None
+            return
+        self.process = context.Process(target=solve_process, args=(child, str(session.directory / 'board.yaml'), session.serials, records, self.seed))
         self.process.start()
         child.close()
         self.solve_directory = session.directory
@@ -571,7 +601,8 @@ class LiveWindow(QtWidgets.QMainWindow):
                     path = write_result(self.solve_directory, value)
                     self.result = self.rig.result = value
                     self.rig.update()
-                    state = 'Converged' if value['solver']['success'] else 'Provisional: iteration limit / solver issue'
+                    state = ('Seed evaluated · unchanged' if value['solver'].get('mode') == 'validation_only' else
+                             ('Converged' if value['solver']['success'] else 'Provisional: iteration limit / solver issue'))
                     self.solve_status.setText(f"{state}\n{len(value['training_ids'])} training · {len(value['validation_ids'])} validation\nSaved {path.name}\nMetric accuracy remains unverified.")
                     self.last_packet = None
         except EOFError:
@@ -593,7 +624,7 @@ class LiveWindow(QtWidgets.QMainWindow):
         running = self.engine is not None and self.engine.running()
         ready = running and self.engine.session is not None and not self.engine.stop_event.is_set()
         self.start_button.setText('Disconnect cameras' if running else 'Connect cameras')
-        for item in (self.source_choice, self.count, self.serials, self.board_button, self.exposure, self.gain):
+        for item in (self.source_choice, self.count, self.serials, self.board_button, self.seed_button, self.exposure, self.gain):
             item.setEnabled(not running and self.process is None)
         self.training_button.setEnabled(ready)
         self.validation_button.setEnabled(ready)
@@ -613,6 +644,20 @@ class LiveWindow(QtWidgets.QMainWindow):
             self.count_label.setText(f'{training} training · {len(samples)-training} validation')
             self.session_label.setText(str(session.directory))
         batch, packet = state['batch'], state['packet']
+        if self.seed is not None and not self.seed_checked and batch and len(batch.frames) == len(batch.serials):
+            try:
+                validate_seed_geometry(self.seed, batch.serials, {s: f.metadata()['image_size'] for s, f in batch.frames.items()})
+                for frame in batch.frames.values():
+                    if any(frame.settings.get(k, 0) for k in ('offset_x', 'offset_y', 'reverse_x', 'reverse_y')):
+                        raise ValueError('Seed needs native unrotated images with zero ROI offset and no sensor reversal')
+                if session:
+                    (session.directory / 'bootstrap.json').write_text(json.dumps(self.seed, indent=2, allow_nan=False))
+                self.seed_checked = True
+            except (ValueError, OSError) as exc:
+                self.fail(str(exc))
+                self.result = self.rig.result = None
+                self.engine.stop()
+                return
         if batch and batch is not self.last_batch:
             columns = min(5, max(1, math.ceil(math.sqrt(len(batch.serials)))))
             for index, serial in enumerate(batch.serials):
@@ -653,8 +698,8 @@ class LiveWindow(QtWidgets.QMainWindow):
             self.metrics.setRowCount(len(serials))
             for row, serial in enumerate(serials):
                 fraction = np.count_nonzero(coverage['cells'][serial]) / (GRID[0]*GRID[1])
-                train = self.result['training'][serial]['rms'] if self.result else None
-                test = self.result['validation'][serial] if self.result else None
+                train = self.result.get('training', {}).get(serial, {}).get('rms') if self.result else None
+                test = self.result.get('validation', {}).get(serial) if self.result else None
                 values = [serial, str(coverage['views'][serial]), f'{fraction:.0%}',
                           '—' if train is None else f'{train:.3f}',
                           '—' if test is None or test['rms'] is None else f"{test['rms']:.3f}",

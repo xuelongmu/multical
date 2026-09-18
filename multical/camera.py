@@ -25,7 +25,7 @@ from structs.struct import split_list
 
 
 class Camera(Parameters):
-  def __init__(self, image_size, intrinsic, dist, model='standard', fix_aspect=False, has_skew=False, error_perview=None, intrinsic_dataset={}):
+  def __init__(self, image_size, intrinsic, dist, model='standard', fix_aspect=False, has_skew=False, error_perview=None, intrinsic_dataset=None):
 
     assert model in Camera.model,\
         f"unknown camera model {model} options are {list(self.model.keys())}"
@@ -38,7 +38,7 @@ class Camera(Parameters):
     self.fix_aspect = fix_aspect
     self.has_skew = has_skew
     self.error_perview = error_perview #
-    self.intrinsic_dataset = intrinsic_dataset  # Collects views that are used for intrinsic calibration
+    self.intrinsic_dataset = intrinsic_dataset or {}  # Exact membership of the intrinsic fit
 
   model = struct(
       standard=0,
@@ -68,8 +68,9 @@ class Camera(Parameters):
   @staticmethod
   def calibrate(boards, intrinsic_error_limit, detections, image_size, max_iter=10, eps=1e-3,
                 model='standard', fix_aspect=False, has_skew=False, flags=0, max_images=None):
-    '''
-    iteratively selects best images to calculate intrinsic parameters
+    '''Fit the selected views without deleting difficult observations.
+
+    intrinsic_error_limit is a diagnostic target, never silently relaxed.
     '''
 
     points = calibration_points(boards, detections)
@@ -81,27 +82,18 @@ class Camera(Parameters):
                 cv2.TERM_CRITERIA_MAX_ITER, max_iter, eps)
     flags = Camera.flags(model, fix_aspect) | flags
 
-    err = intrinsic_error_limit
-    while abs(err) >= intrinsic_error_limit:
-      err, K, dist, r, t, _, _, error_perView = cv2.calibrateCameraExtended(points.object_points, points.corners,
-                                                                            image_size, None, None, criteria=criteria,
-                                                                            flags=flags)
-      if len(error_perView) >= 15:
-        err = float("{:.2f}".format(err))
-        threshold = np.quantile(error_perView, 0.95)
-        inliers = [(i) for i, err in enumerate(error_perView) if err < threshold]
-        points.object_points = np.array([points.object_points[i] for i in inliers], dtype=object)
-        points.corners = np.array([points.corners[i] for i in inliers], dtype=object)
-        points.ids = np.array([points.ids[i] for i in inliers], dtype=object)
-        points.board_offset = np.array([points.board_offset[i] for i in inliers], dtype=object)
-        points.image_ids = np.array([points.image_ids[i] for i in inliers], dtype=object)
-      else:
-        intrinsic_error_limit += 0.1
+    if len(points.corners) < 3:
+      raise ValueError("Intrinsic calibration requires at least three usable views")
+    err, K, dist, r, t, _, _, error_perView = cv2.calibrateCameraExtended(
+      points.object_points, points.corners, image_size, None, None,
+      criteria=criteria, flags=flags)
 
     return Camera(intrinsic=K, dist=dist, image_size=image_size,
                   model=model, fix_aspect=fix_aspect, has_skew=has_skew,
                   error_perview=error_perView,
-                  intrinsic_dataset={'board_ids': list(points.board_offset), 'image_ids': list(points.image_ids)}
+                  intrinsic_dataset={'board_ids': list(points.board_offset), 'image_ids': list(points.image_ids),
+                                     'target_rms': intrinsic_error_limit,
+                                     'target_met': bool(err <= intrinsic_error_limit)}
                   ), err
 
   def scale_image(self, factor):
@@ -172,7 +164,8 @@ class Camera(Parameters):
 
   def __getstate__(self):
     return subset(self.__dict__, 
-      ['image_size', 'intrinsic', 'dist', 'fix_aspect', 'has_skew', 'model']
+      ['image_size', 'intrinsic', 'dist', 'fix_aspect', 'has_skew', 'model',
+       'error_perview', 'intrinsic_dataset']
     )
 
   def copy(self, **k):

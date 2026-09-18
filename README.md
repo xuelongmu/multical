@@ -3,6 +3,10 @@
 
 Multi-camera calibration using one or more calibration patterns. 
 
+For standalone live FLIR acquisition, visual board guidance, and background calibration,
+see [Multical Live](LIVE_CALIBRATION.md). Start its rendered test rig with
+`./run-live --demo --auto-capture`, or use `./run-live --count 25` for direct PySpin capture.
+
 ![image](https://raw.githubusercontent.com/saulzar/multical/master/screenshots/image_view.png)
 ![image](https://raw.githubusercontent.com/saulzar/multical/master/screenshots/3d_view.png)
 

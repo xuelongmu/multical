@@ -1,0 +1,14 @@
+# Nominal target geometry. Measure the physical print before metric acceptance.
+boards:
+  big36_0:
+    _type_: charuco
+    size: [5, 7]
+    aruco_dict: 4X4_50
+    aruco_offset: 0
+    square_length: 0.170
+    marker_length: 0.127
+    min_rows: 3
+    min_points: 9
+aruco_params:
+  adaptiveThreshWinSizeMax: 200
+  adaptiveThreshWinSizeStep: 50

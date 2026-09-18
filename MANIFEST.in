@@ -1,1 +1,2 @@
 include multical/interface/*.ui
+include multical/live/*.yaml

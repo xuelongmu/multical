@@ -17,6 +17,7 @@ from .audio import CaptureSounds, AttentionCue, GuidanceCue
 from .guidance import capture_progress, inspection_advice, inspection_group
 from .metrics import GRID, live_projection
 from .session import write_result
+from .validation_state import geometry_key, save_evaluation, restore_evaluation
 from .sources import PySpinSource, SimulatedSource
 
 
@@ -260,7 +261,7 @@ class RigView(QtWidgets.QWidget):
         detail = f'{serial} · {status}\n{views} varied validation poses in this session'
         if n:
             detail += f"\nLast evaluation: {metric['rms']:.2f} px RMS · {n} corners · {failed} failed"
-            detail += '\nNew captures require another evaluation.'
+            detail += '\nNew validation captures are evaluated automatically.'
         elif failed:
             detail += f'\n{failed} corners lacked an independent prediction'
         detail += '\nLabels show last four serial digits; hover shows full serial.\nArrow: camera viewing direction · ring: board visible now\nClick to inspect camera; drag to orbit; scroll to zoom'
@@ -414,6 +415,9 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.engine = self.result = self.process = self.connection = None
         self.seed = load_seed(args.seed) if getattr(args, 'seed', None) else None
         self.seed_checked = False
+        self.evaluation_restored = False
+        self.auto_validation_attempt = None
+        self.evaluated_key = None
         self.last_packet = self.last_batch = None
         self.selected = None
         self.focus_changed_at = 0.
@@ -870,6 +874,9 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.rig.observations = {}
         self.rig.reset_view()
         self.seed_checked = False
+        self.evaluation_restored = False
+        self.auto_validation_attempt = None
+        self.evaluated_key = None
         self.last_packet = self.last_batch = None
         for tile in self.tiles.values():
             self.wall_grid.removeWidget(tile)
@@ -1104,7 +1111,32 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.inspection_advice.setVisible(not self.four_up.isChecked())
         self.inspection.update()
 
-    def solve(self):
+    def auto_evaluate(self, session):
+        if (self.closing or self.pending_session_action is not None or self.process is not None
+                or (self.seed is not None and not self.seed_checked)):
+            return
+        records = list(session.samples)
+        if not self.evaluation_restored:
+            self.evaluation_restored = True
+            try:
+                saved = restore_evaluation(session.directory, self.seed, records)
+                if saved is not None:
+                    self.result = self.rig.result = saved
+                    self.evaluated_key = (str(session.directory), geometry_key(saved), tuple(saved.get('validation_ids', [])))
+                    self.solve_status.setText('Saved evaluation restored')
+                    self.last_packet = None
+            except (ValueError, KeyError, OSError) as exc:
+                self.fail(f'Saved evaluation ignored: {exc}')
+        if self.result is None:
+            return
+        ids = tuple(r['id'] for r in records if r['role'] == 'validation')
+        key = (str(session.directory), geometry_key(self.result), ids)
+        if not ids or key == self.evaluated_key or key == self.auto_validation_attempt:
+            return
+        self.auto_validation_attempt = key
+        self.solve(evaluate_only=True)
+
+    def solve(self, evaluate_only=False):
         if self.process is not None or not self.engine or not self.engine.session:
             return
         session = self.engine.session
@@ -1120,13 +1152,16 @@ class LiveWindow(QtWidgets.QMainWindow):
             child.close()
             self.connection = None
             return
-        self.process = context.Process(target=solve_process, args=(child, str(session.directory / 'board.yaml'), session.serials, records, self.seed))
+        self.solve_evaluation = evaluate_only
+        self.solve_records = records
+        self.process = context.Process(target=solve_process, args=(child, str(session.directory / 'board.yaml'),
+                                       session.serials, records, self.result if evaluate_only else self.seed, evaluate_only))
         self.process.start()
         child.close()
         self.solve_directory = session.directory
         self.solve_simulated = session.manifest['simulated']
         self.cancel_button.show()
-        self.solve_status.setText('Starting calibration worker… live acquisition continues.')
+        self.solve_status.setText('Evaluating validation poses…' if evaluate_only else 'Starting calibration worker… live acquisition continues.')
         self.error_label.hide()
 
     def cancel_solve(self):
@@ -1154,10 +1189,14 @@ class LiveWindow(QtWidgets.QMainWindow):
                     self.solve_status.setText('Calibration needs attention')
                 elif kind == 'result':
                     value['simulated'] = self.solve_simulated
-                    path = write_result(self.solve_directory, value)
+                    path = save_evaluation(self.solve_directory, value, self.seed, self.solve_records)
+                    if not self.solve_evaluation:
+                        path = write_result(self.solve_directory, value)
                     self.result = self.rig.result = value
+                    self.evaluated_key = (str(self.solve_directory), geometry_key(value), tuple(value['validation_ids']))
                     self.rig.update()
-                    state = ('Seed evaluated · unchanged' if value['solver'].get('mode') == 'validation_only' else
+                    state = ('Validation evaluated · camera parameters unchanged' if self.solve_evaluation else
+                             'Seed evaluated · unchanged' if value['solver'].get('mode') == 'validation_only' else
                              ('Converged' if value['solver']['success'] else 'Provisional: iteration limit / solver issue'))
                     self.solve_status.setText(f"{state}\n{len(value['training_ids'])} training · {len(value['validation_ids'])} validation\nSaved {path.name}\nMetric accuracy remains unverified.")
                     self.last_packet = None
@@ -1250,6 +1289,8 @@ class LiveWindow(QtWidgets.QMainWindow):
                 self.result = self.rig.result = None
                 self.engine.stop()
                 return
+        if session and ready:
+            self.auto_evaluate(session)
         if batch and batch is not self.last_batch:
             for index, serial in enumerate(batch.serials):
                 if serial not in self.tiles:

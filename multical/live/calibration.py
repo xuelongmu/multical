@@ -214,10 +214,22 @@ def solve_snapshot(board_file, serials, records, progress=lambda message: None, 
                 seed_validation=validate(board, validation, serials, seed_cameras, seed_poses) if seed is not None else None)
 
 
-def solve_process(connection, board_file, serials, records, seed=None):
+def evaluate_snapshot(board_file, serials, records, calibration):
+    """Evaluate held-out observations without fitting or changing the calibration."""
+    validation = [r for r in records if r['role'] == 'validation']
+    checked = solve_snapshot(board_file, serials, validation, seed=calibration)
+    result = copy.deepcopy(calibration)
+    result.update(validation=checked['validation'], validation_ids=checked['validation_ids'],
+                  accuracy_status='unverified')
+    result.setdefault('training_ids', [])
+    return result
+
+
+def solve_process(connection, board_file, serials, records, seed=None, evaluate_only=False):
     try:
-        result = solve_snapshot(board_file, serials, records,
-                                progress=lambda message: connection.send(('progress', message)), seed=seed)
+        result = (evaluate_snapshot(board_file, serials, records, seed) if evaluate_only else
+                  solve_snapshot(board_file, serials, records,
+                                 progress=lambda message: connection.send(('progress', message)), seed=seed))
         connection.send(('result', result))
     except Exception as exc:
         connection.send(('error', str(exc)))

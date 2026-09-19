@@ -143,3 +143,5 @@ cython_debug/
 .idea
 live-sessions/
 .worktrees/
+.native/
+recordings/

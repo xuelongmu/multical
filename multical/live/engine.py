@@ -45,7 +45,7 @@ class LiveEngine:
             serials = self.source.open()
             coverage = Coverage(serials)
             session = Session(self.output, self.board_file, serials,
-                              simulated=self.source.__class__.__name__ == 'SimulatedSource',
+                              simulated=self.source.__class__.__name__ == 'SimulatedSource' or getattr(self.source, 'simulated', False) is True,
                               capture_mode=self.capture_mode, resume=self.resume)
             validation_coverage = Coverage(serials)
             if session.samples:
@@ -100,6 +100,9 @@ class LiveEngine:
                 if batch is None or batch.sequence == sequence:
                     continue
                 sequence = batch.sequence
+                if self.recording_busy():
+                    self.previous = None
+                    continue
                 try:
                     jobs = {s: pool.submit(observe, self.board, f) for s, f in batch.frames.items()}
                     observations = {s: future.result() for s, future in jobs.items()}
@@ -125,6 +128,9 @@ class LiveEngine:
                         role = requested_role = self.pending_capture
                         if role is None:
                             role = self.automatic_role(observations, stationary)
+                    if self.recording_busy():
+                        self.previous = None
+                        continue
                     partition_conflict = (role == 'validation' and self.coverage.matches_pose(observations)) or \
                                          (role == 'training' and self.validation_coverage.matches_pose(observations))
                     if role and not self.paused and usable and not problems and not partition_conflict and batch.sequence != self.captured_sequence:
@@ -168,7 +174,7 @@ class LiveEngine:
                     self.stop_event.set()
 
     def automatic_role(self, observations, stationary):
-        if not self.auto_capture or self.paused or not stationary:
+        if not self.auto_capture or self.paused or not stationary or self.recording_busy():
             return None
         role = self.auto_capture_role
         if role not in ('training', 'validation'):
@@ -189,6 +195,8 @@ class LiveEngine:
 
     def capture(self, role):
         with self.lock:
+            if self.recording_busy():
+                raise ValueError('Pose collection is suspended during video recording')
             if self.paused:
                 raise ValueError('Capture is paused; resume before saving a pose')
             if self.pending_capture:
@@ -200,6 +208,9 @@ class LiveEngine:
             return dict(batch=self.latest_batch, packet=self.packet, status=self.status,
                         error=self.error, pending=self.pending_capture, paused=self.paused,
                         session=self.session, capture_event=self.capture_event)
+
+    def recording_busy(self):
+        return bool(getattr(self.source, 'recording_busy', lambda: False)())
 
     def stop(self):
         self.stop_event.set()

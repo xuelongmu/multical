@@ -18,6 +18,9 @@ def main():
     parser.add_argument('--fps', type=float, default=5., help='Scheduled capture frequency (default 5 Hz)')
     parser.add_argument('--workers', type=int, default=4, help='Detection worker count')
     parser.add_argument('--sdk-path', help='Directory containing the Spinnaker PySpin module')
+    parser.add_argument('--camera-backend', choices=['native', 'pyspin'], default='native',
+                        help='Native enables colour recording; PySpin is the calibration-only fallback')
+    parser.add_argument('--recordings', help='Parent folder for video takes; choose in the recording settings menu')
     parser.add_argument('--exposure-us', type=float, help='Apply one exposure to all cameras for this session')
     parser.add_argument('--gain-db', type=float, help='Apply one gain to all cameras for this session')
     parser.add_argument('--autostart', action='store_true', help='Connect hardware immediately rather than with the UI button')

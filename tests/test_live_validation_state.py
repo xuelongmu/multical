@@ -40,7 +40,7 @@ class ValidationStateTests(unittest.TestCase):
             self.assertEqual(result[key], base[key])
 
     def test_scheduler_coalesces_and_does_not_retry_same_failed_snapshot(self):
-        window = SimpleNamespace(closing=False, pending_session_action=None, process=None,
+        window = SimpleNamespace(closing=False, pending_session_action=None, process=None, engine=None,
             result=dict(cameras={}, camera_poses={}), seed=None, seed_checked=False,
             evaluation_restored=True, auto_validation_attempt=None, evaluated_key=None, solve=Mock())
         session = SimpleNamespace(directory='session', samples=[dict(id='1', role='validation')])

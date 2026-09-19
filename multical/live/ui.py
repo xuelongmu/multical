@@ -33,7 +33,11 @@ QPushButton:hover { background: #3c3c3c; }
 QPushButton:disabled { color: #777777; background: #252525; border-color: #353535; }
 QPushButton#primary { background: #52dfbc; color: #0c2521; font-weight: 600; border: none; }
 QLineEdit, QSpinBox, QComboBox { background: #1b1b1b; border: 1px solid #444444; border-radius: 5px; padding: 5px; }
-QCheckBox { spacing: 9px; padding: 5px 0; }
+QCheckBox { spacing: 7px; padding: 4px 0; }
+QCheckBox::indicator { width: 14px; height: 14px; border: 1px solid #999999; border-radius: 2px; background: #666666; }
+QCheckBox::indicator:hover { background: #808080; border-color: #bbbbbb; }
+QCheckBox::indicator:checked { background: #a0a0a0; border-color: #bdbdbd; image: url(CHECK_ICON_PATH); }
+QCheckBox::indicator:disabled { background: #444444; border-color: #606060; }
 QTableWidget { background: #1b1b1b; alternate-background-color: #242424; border: none; gridline-color: #333333; }
 QHeaderView::section { background: #292929; color: #bbbbbb; padding: 5px; border: none; }
 QScrollArea { border: none; }
@@ -281,7 +285,7 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.pending_session_action = None
         self.setWindowTitle('Multical Live')
         self.resize(1500, 920)
-        self.setStyleSheet(STYLE)
+        self.setStyleSheet(STYLE.replace('CHECK_ICON_PATH', (Path(__file__).with_name('check.svg')).as_posix()))
         root = QtWidgets.QWidget()
         outer = QtWidgets.QVBoxLayout(root)
         outer.setContentsMargins(12, 10, 12, 10)

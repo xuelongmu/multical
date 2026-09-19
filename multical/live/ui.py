@@ -386,6 +386,12 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.wall_grid.setContentsMargins(0, 0, 4, 0)
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOn)
+        self.wall_scroll = scroll
+        self.wall_layout_key = None
+        scroll.viewport().installEventFilter(self)
+        self.wall_grid.setSizeConstraint(QtWidgets.QLayout.SetNoConstraint)
         scroll.setWidget(self.wall)
         wall_layout.addWidget(scroll)
         upper.addWidget(wall_box)
@@ -526,6 +532,7 @@ class LiveWindow(QtWidgets.QMainWindow):
             self.wall_grid.removeWidget(tile)
             tile.deleteLater()
         self.tiles = {}
+        self.wall_layout_key = None
         self.selected = None
         self.focus_changed_at = 0.
         self.quad_serials = []
@@ -561,6 +568,37 @@ class LiveWindow(QtWidgets.QMainWindow):
         if self.engine:
             with self.engine.lock:
                 self.engine.auto_capture = enabled
+
+    def eventFilter(self, watched, event):
+        if hasattr(self, 'wall_scroll') and watched is self.wall_scroll.viewport():
+            if event.type() == QtCore.QEvent.Resize:
+                QtCore.QTimer.singleShot(0, self.reflow_wall)
+        return super().eventFilter(watched, event)
+
+    def reflow_wall(self):
+        if not self.tiles:
+            return
+        margins = self.wall_grid.contentsMargins()
+        width = max(1, self.wall_scroll.viewport().width() - margins.left() - margins.right())
+        spacing = max(0, self.wall_grid.horizontalSpacing())
+        columns = min(len(self.tiles), max(1, (width + spacing) // (160 + spacing)))
+        key = (columns, tuple(self.tiles))
+        if key == self.wall_layout_key:
+            return
+        self.wall_layout_key = key
+        for tile in self.tiles.values():
+            self.wall_grid.removeWidget(tile)
+        for col in range(self.wall_grid.columnCount()):
+            self.wall_grid.setColumnStretch(col, 0)
+            self.wall_grid.setColumnMinimumWidth(col, 0)
+        for row in range(self.wall_grid.rowCount()):
+            self.wall_grid.setRowStretch(row, 0)
+            self.wall_grid.setRowMinimumHeight(row, 0)
+        for index, tile in enumerate(self.tiles.values()):
+            self.wall_grid.addWidget(tile, index // columns, index % columns)
+        for col in range(columns):
+            self.wall_grid.setColumnStretch(col, 1)
+        self.wall_grid.invalidate()
 
     def toggle_four_up(self, enabled):
         self.quad.setVisible(enabled)
@@ -798,15 +836,12 @@ class LiveWindow(QtWidgets.QMainWindow):
                 self.engine.stop()
                 return
         if batch and batch is not self.last_batch:
-            columns = min(5, max(1, math.ceil(math.sqrt(len(batch.serials)))))
             for index, serial in enumerate(batch.serials):
                 if serial not in self.tiles:
                     tile = CameraTile(serial)
-                    if len(batch.serials) > 9:
-                        tile.setMinimumSize(100, 95)
+                    tile.setMinimumSize(100, 125)
                     tile.selected.connect(self.select)
                     self.tiles[serial] = tile
-                    self.wall_grid.addWidget(tile, index // columns, index % columns)
                 tile = self.tiles[serial]
                 frame = batch.frames.get(serial)
                 tile.missing = frame is None
@@ -817,6 +852,7 @@ class LiveWindow(QtWidgets.QMainWindow):
                 else:
                     tile.detail = 'MISSING FRAME'
                 tile.update()
+            self.reflow_wall()
             if self.selected is None:
                 self.select(batch.serials[0], automatic=True)
             spread = batch.spread_us

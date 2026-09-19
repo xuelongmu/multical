@@ -89,3 +89,5 @@ Session controls are above the camera wall:
 - **Load calibration…** accepts a live/multical/converted-Captury calibration JSON and starts a fresh session using it as a seed. It preserves the previous session and checks camera identity and image geometry before using the seed. Use Open saved session to recover captured poses instead.
 
 New/open/load wait for acquisition to stop and camera settings to restore before reconnecting. The current auto-capture preference is retained; the new/resumed collection is unpaused. Pausing is the immediate way to take a break without disconnecting the cameras.
+
+The compact interface uses neutral charcoal surfaces and no title banner. Camera settings are in a collapsed drawer; session actions use short labels with standard icons. Detailed guidance is available in tooltips and Help. The live status row summarizes view counts, connectivity and detection steadiness. Corner IDs are off by default and can be enabled beside Coverage. The empty rig panel is hidden until a calibration is loaded or fitted, and the preview area receives most of the initial vertical space. Pane dividers remain adjustable.

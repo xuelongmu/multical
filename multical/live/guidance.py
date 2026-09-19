@@ -37,15 +37,15 @@ def capture_progress(coverage, validation, seeded=False):
 
 def inspection_advice(observation, novel):
     if observation is None:
-        return 'Waiting for a detected frame from this camera.'
+        return 'Waiting for detection.'
     if not observation['usable']:
-        return 'Face the board toward this camera and move closer. Keep the pattern in view; lifting to camera height is unnecessary.'
+        return 'Face this camera; move closer.'
     marker = observation.get('marker_px')
     if marker is not None and marker < 24:
-        return 'Board detected, but small or angled away. Move closer or face it toward this camera. The size hint is advisory.'
+        return 'Small markers — move closer. Size hint is advisory.'
     if not novel:
-        return 'This view repeats saved coverage. Move the board within the image, change its tilt or distance, then hold still.'
-    return 'New view available. Hold still and press Space; include a second camera to connect their poses.'
+        return 'View repeats saved coverage — change position or tilt.'
+    return 'New view — hold still. Space to capture.'
 
 
 def inspection_group(coverage, observations, anchor=None, limit=4):
@@ -71,13 +71,13 @@ def inspection_group(coverage, observations, anchor=None, limit=4):
             tier = 3
         return (tier, *need(s))
     partners = sorted((s for s in serials if s != anchor), key=rank)
-    result = [(anchor, 'Target: needs varied views')]
+    result = [(anchor, 'Target')]
     for s in partners[:max(0, limit-1)]:
         shared = int(coverage['overlaps'][index, serials.index(s)])
         if anchor in visible and s in visible:
-            reason = 'Visible now: bridge groups' if membership[s] != membership[anchor] else 'Visible together now'
+            reason = 'New bridge' if membership[s] != membership[anchor] else 'Co-visible'
         elif shared:
-            reason = f'{shared} shared poses with target'
+            reason = f'{shared} shared poses'
         else:
             reason = 'Scout: overlap not established'
         result.append((s, reason))

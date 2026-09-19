@@ -86,19 +86,19 @@ class Coverage:
             return problems[0]
         usable = [s for s, o in observations.items() if o['usable']]
         if not usable:
-            return 'Show the board to a camera. Spread corners over at least three rows and columns.'
+            return 'Show the board to a camera.'
         tiny = [s for s in usable if observations[s]['marker_px'] is not None and observations[s]['marker_px'] < 24]
         if tiny:
-            return f'Move closer to {tiny[0]} or turn the board toward it; markers are small in this view.'
+            return f'{tiny[0]}: move closer or face the camera.'
         if len(usable) == 1 and len(self.serials) > 1:
-            return 'For camera alignment, show the same board to two or more cameras at once.'
+            return 'Show the board to two or more cameras.'
         weakest = min(usable, key=lambda s: np.count_nonzero(self.cells[s]))
         if not self.novel(weakest, observations[weakest]):
             cell = np.unravel_index(np.argmin(self.cells[weakest]), GRID[::-1])
             vertical = ['upper', 'middle', 'lower'][min(2, cell[0] // 3)]
             horizontal = ['left', 'centre', 'right'][min(2, cell[1] // 4)]
-            return f'{weakest}: move toward the {vertical} {horizontal} of the image and change the board tilt.'
-        return 'Useful new coverage. Hold the board still, then capture a training pose.'
+            return f'{weakest}: try {vertical} {horizontal}; vary tilt.'
+        return 'New coverage — hold still to capture.'
 
 
 def live_projection(board, packet, result):

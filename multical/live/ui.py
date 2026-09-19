@@ -21,26 +21,26 @@ from .sources import PySpinSource, SimulatedSource
 
 ACCENT = '#52dfbc'
 STYLE = '''
-QMainWindow, QWidget { background: #10171f; color: #e4edf3; font-family: sans-serif; font-size: 13px; }
-QFrame#panel { background: #18222d; border: 1px solid #2a3947; border-radius: 9px; }
-QLabel#title { font-size: 25px; font-weight: 600; }
-QLabel#muted { color: #9cabb9; }
-QLabel#guidance { background: #183630; color: #9cf0d9; border: 1px solid #285648; border-radius: 8px; padding: 14px; font-size: 15px; }
+QMainWindow, QWidget { background: #171717; color: #eeeeee; font-family: sans-serif; font-size: 12px; }
+QFrame#panel { background: #202020; border: 1px solid #363636; border-radius: 9px; }
+QLabel { background: transparent; }
+QLabel#muted { color: #aaaaaa; }
+QLabel#guidance { background: #232827; color: #d5e9e3; border: 1px solid #3b4a45; border-radius: 8px; padding: 9px; font-size: 14px; }
 QLabel#error { color: #ffb2a5; background: #3b2528; border-radius: 6px; padding: 10px; }
-QPushButton { background: #263746; border: 1px solid #3b5163; border-radius: 6px; padding: 9px 12px; }
-QPushButton:hover { background: #344b5e; }
-QPushButton:disabled { color: #65798a; background: #1b2731; border-color: #263542; }
+QPushButton { background: #303030; border: 1px solid #454545; border-radius: 6px; padding: 6px 9px; }
+QPushButton:hover { background: #3c3c3c; }
+QPushButton:disabled { color: #777777; background: #252525; border-color: #353535; }
 QPushButton#primary { background: #52dfbc; color: #0c2521; font-weight: 600; border: none; }
-QLineEdit, QSpinBox, QComboBox { background: #101922; border: 1px solid #384957; border-radius: 5px; padding: 7px; }
+QLineEdit, QSpinBox, QComboBox { background: #1b1b1b; border: 1px solid #444444; border-radius: 5px; padding: 5px; }
 QCheckBox { spacing: 9px; padding: 5px 0; }
-QTableWidget { background: #141f29; alternate-background-color: #1a2733; border: none; gridline-color: #283947; }
-QHeaderView::section { background: #233240; color: #b7c6d2; padding: 7px; border: none; }
+QTableWidget { background: #1b1b1b; alternate-background-color: #242424; border: none; gridline-color: #333333; }
+QHeaderView::section { background: #292929; color: #bbbbbb; padding: 5px; border: none; }
 QScrollArea { border: none; }
-QSplitter::handle { background: #25333f; }
-QTabBar::tab { background: #1d2b37; padding: 8px 16px; }
-QTabBar::tab:selected { color: #52dfbc; background: #293b49; }
-QTabWidget::pane { border: 1px solid #293b49; }
-QToolTip { background: #243848; color: white; border: 1px solid #4d6476; }
+QSplitter::handle { background: #353535; }
+QTabBar::tab { background: #242424; padding: 8px 16px; }
+QTabBar::tab:selected { color: #52dfbc; background: #363636; }
+QTabWidget::pane { border: 1px solid #363636; }
+QToolTip { background: #303030; color: white; border: 1px solid #555555; }
 '''
 
 
@@ -79,16 +79,16 @@ class CameraTile(QtWidgets.QWidget):
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
-        painter.fillRect(self.rect(), QtGui.QColor('#18232d'))
+        painter.fillRect(self.rect(), QtGui.QColor('#202020'))
         if self.image is not None and not self.missing:
             available = QtCore.QRect(4, 28, self.width()-8, self.height()-54)
             size = self.image.size().scaled(available.size(), QtCore.Qt.KeepAspectRatio)
             target = QtCore.QRect(QtCore.QPoint(0, 0), size)
             target.moveCenter(available.center())
             painter.drawImage(target, self.image)
-        painter.setPen(QtGui.QColor('#e4edf3'))
+        painter.setPen(QtGui.QColor('#eeeeee'))
         painter.drawText(10, 20, self.serial)
-        painter.setPen(QtGui.QColor('#ffb2a5' if self.missing else '#9cabb9'))
+        painter.setPen(QtGui.QColor('#ffb2a5' if self.missing else '#aaaaaa'))
         painter.drawText(10, self.height()-9, self.detail)
         if self.active:
             painter.setPen(QtGui.QPen(QtGui.QColor(ACCENT), 2))
@@ -103,6 +103,7 @@ class InspectionView(QtWidgets.QWidget):
         self.prediction = None
         self.cells = None
         self.show_coverage = True
+        self.show_ids = False
         self.zoom = 1.
         self.pan = QtCore.QPointF(0, 0)
         self.drag = None
@@ -133,9 +134,9 @@ class InspectionView(QtWidgets.QWidget):
 
     def paintEvent(self, event):
         p = QtGui.QPainter(self)
-        p.fillRect(self.rect(), QtGui.QColor('#0b1118'))
+        p.fillRect(self.rect(), QtGui.QColor('#111111'))
         if self.image is None:
-            p.setPen(QtGui.QColor('#9cabb9'))
+            p.setPen(QtGui.QColor('#aaaaaa'))
             p.drawText(self.rect(), QtCore.Qt.AlignCenter, 'Select a camera to inspect board detection')
             return
         size = self.image.size().scaled(self.size(), QtCore.Qt.KeepAspectRatio)
@@ -164,7 +165,8 @@ class InspectionView(QtWidgets.QWidget):
             at = pixel(point)
             p.setPen(QtGui.QPen(QtGui.QColor(ACCENT), 2))
             p.drawEllipse(at, 3, 3)
-            p.drawText(at + QtCore.QPointF(4, -4), str(identity))
+            if self.show_ids:
+                p.drawText(at + QtCore.QPointF(4, -4), str(identity))
             if self.prediction is not None:
                 predicted = pixel(self.prediction['points'][index])
                 p.setPen(QtGui.QPen(QtGui.QColor('#ffb45f'), 1.5))
@@ -180,7 +182,7 @@ class RigView(QtWidgets.QWidget):
         self.result = self.target = None
         self.yaw, self.pitch, self.zoom = -.55, .35, 1.0
         self.drag = None
-        self.setMinimumSize(350, 200)
+        self.setMinimumSize(280, 140)
 
     def mousePressEvent(self, event):
         self.drag = event.pos()
@@ -203,8 +205,8 @@ class RigView(QtWidgets.QWidget):
     def paintEvent(self, event):
         p = QtGui.QPainter(self)
         p.setRenderHint(QtGui.QPainter.Antialiasing)
-        p.fillRect(self.rect(), QtGui.QColor('#111c26'))
-        p.setPen(QtGui.QColor('#9cabb9'))
+        p.fillRect(self.rect(), QtGui.QColor('#191919'))
+        p.setPen(QtGui.QColor('#aaaaaa'))
         if self.result is None:
             p.drawText(self.rect(), QtCore.Qt.AlignCenter, 'Camera geometry appears after calibration\nCapture shared poses across the rig')
             return
@@ -220,12 +222,12 @@ class RigView(QtWidgets.QWidget):
         def project(point):
             transformed = rotation @ (point-centre)
             return QtCore.QPointF(self.width()/2 + transformed[0]*scale, self.height()/2 + transformed[1]*scale)
-        p.setPen(QtGui.QPen(QtGui.QColor('#2a414f'), 1))
+        p.setPen(QtGui.QPen(QtGui.QColor('#3b3b3b'), 1))
         for a in np.linspace(-span, span, 9):
             p.drawLine(project(np.array([a, 0, -span])+centre), project(np.array([a, 0, span])+centre))
             p.drawLine(project(np.array([-span, 0, a])+centre), project(np.array([span, 0, a])+centre))
         for target in targets:
-            p.setPen(QtGui.QColor('#5d90ac'))
+            p.setPen(QtGui.QColor('#aaaaaa'))
             p.drawEllipse(project(target), 2, 2)
         for serial, pos in centres.items():
             p.setPen(QtGui.QPen(QtGui.QColor(ACCENT), 2))
@@ -241,7 +243,7 @@ class RigView(QtWidgets.QWidget):
             pos = world[:3, 3]
             p.drawEllipse(project(pos), 7, 7)
             p.drawLine(project(pos), project(pos + world[:3, 2] * span*.15))
-        p.setPen(QtGui.QColor('#9cabb9'))
+        p.setPen(QtGui.QColor('#aaaaaa'))
         p.drawText(12, 20, f'Calibration world frame · extent {span:.2f} m · drag to orbit, scroll to zoom')
 
 
@@ -262,49 +264,48 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.closing = False
         self.pending_session_action = None
         self.setWindowTitle('Multical Live — capture, inspect, calibrate')
-        self.resize(1550, 1000)
+        self.resize(1500, 920)
         self.setStyleSheet(STYLE)
         root = QtWidgets.QWidget()
         outer = QtWidgets.QVBoxLayout(root)
-        outer.setContentsMargins(20, 16, 20, 14)
-        header = QtWidgets.QHBoxLayout()
-        title = QtWidgets.QVBoxLayout()
-        title.addWidget(label('Multical / Live', 'title'))
-        subtitle = label('Direct camera acquisition · board guidance · camera calibration', 'muted')
-        subtitle.setMinimumWidth(650)
-        title.addWidget(subtitle)
-        header.addLayout(title)
-        header.addStretch()
+        outer.setContentsMargins(12, 10, 12, 10)
         self.mode_badge = label('DISCONNECTED', 'muted')
-        self.mode_badge.setMinimumWidth(220)
-        header.addWidget(self.mode_badge)
-        outer.addLayout(header)
+        self.mode_badge.setWordWrap(False)
         body = QtWidgets.QHBoxLayout()
         sidebar = QtWidgets.QFrame()
         sidebar.setObjectName('panel')
-        sidebar.setFixedWidth(290)
+        sidebar.setFixedWidth(245)
         controls = QtWidgets.QVBoxLayout(sidebar)
-        controls.setContentsMargins(16, 16, 16, 16)
-        controls.addWidget(label('ACQUISITION', 'muted'))
+        controls.setContentsMargins(12, 12, 12, 12)
+        controls.setSpacing(7)
+        settings_toggle = QtWidgets.QToolButton()
+        settings_toggle.setText('Camera settings')
+        settings_toggle.setCheckable(True)
+        settings_toggle.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+        settings_toggle.setArrowType(QtCore.Qt.RightArrow)
+        controls.addWidget(settings_toggle)
+        settings = QtWidgets.QWidget()
+        settings_layout = QtWidgets.QVBoxLayout(settings)
+        settings_layout.setContentsMargins(0, 4, 0, 4)
         self.source_choice = QtWidgets.QComboBox()
         self.source_choice.addItems(['FLIR cameras · PySpin', 'Simulated rig · testing'])
         self.source_choice.setCurrentIndex(1 if args.demo else 0)
-        controls.addWidget(self.source_choice)
+        settings_layout.addWidget(self.source_choice)
         self.capture_mode = QtWidgets.QComboBox()
         self.capture_mode.addItem('Stationary board', 'stationary')
         self.capture_mode.addItem('Moving board · strict timing', 'motion')
         self.capture_mode.setCurrentIndex(1 if getattr(args, 'capture_mode', 'stationary') == 'motion' else 0)
         self.capture_mode.setToolTip('Hold the board still during each capture. Different fixed exposures are allowed in stationary mode.')
-        controls.addWidget(self.capture_mode)
-        controls.addWidget(label('Expected cameras', 'muted'))
+        settings_layout.addWidget(self.capture_mode)
+        settings_layout.addWidget(label('Expected cameras', 'muted'))
         self.count = QtWidgets.QSpinBox()
         self.count.setRange(1, 64)
         self.count.setValue(args.count)
-        controls.addWidget(self.count)
-        controls.addWidget(label('Camera serials (optional, comma separated)', 'muted'))
+        settings_layout.addWidget(self.count)
+        settings_layout.addWidget(label('Camera serials (optional, comma separated)', 'muted'))
         self.serials = QtWidgets.QLineEdit(','.join(args.serials))
-        controls.addWidget(self.serials)
-        controls.addWidget(label('Exposure (µs) / gain (dB) override · optional', 'muted'))
+        settings_layout.addWidget(self.serials)
+        settings_layout.addWidget(label('Exposure (µs) / gain (dB) override · optional', 'muted'))
         exposure_row = QtWidgets.QHBoxLayout()
         self.exposure = QtWidgets.QLineEdit('' if args.exposure_us is None else str(args.exposure_us))
         self.gain = QtWidgets.QLineEdit('' if args.gain_db is None else str(args.gain_db))
@@ -312,10 +313,14 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.gain.setPlaceholderText('Camera value')
         exposure_row.addWidget(self.exposure)
         exposure_row.addWidget(self.gain)
-        controls.addLayout(exposure_row)
+        settings_layout.addLayout(exposure_row)
+        settings.hide()
+        settings_toggle.toggled.connect(settings.setVisible)
+        settings_toggle.toggled.connect(lambda expanded: settings_toggle.setArrowType(QtCore.Qt.DownArrow if expanded else QtCore.Qt.RightArrow))
+        controls.addWidget(settings)
         self.board_label = label(f'{Path(self.board_file).name}\n{self.board.num_points} corners · {self.board.square_length*1000:g} mm squares', 'muted')
         controls.addWidget(self.board_label)
-        self.board_button = QtWidgets.QPushButton('Choose board…')
+        self.board_button = QtWidgets.QPushButton('Board…')
         self.board_button.clicked.connect(self.choose_board)
         controls.addWidget(self.board_button)
         self.seed_button = QtWidgets.QPushButton('Load calibration…')
@@ -325,16 +330,16 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.start_button.setObjectName('primary')
         self.start_button.clicked.connect(self.toggle_capture)
         controls.addWidget(self.start_button)
-        controls.addWidget(label('Close other camera applications before connecting.', 'muted'))
-        controls.addSpacing(16)
+        self.start_button.setToolTip('Close other camera applications before connecting.')
+        controls.addSpacing(6)
         controls.addWidget(label('COLLECT POSES', 'muted'))
-        self.training_button = QtWidgets.QPushButton('Capture training  [Space]')
-        self.validation_button = QtWidgets.QPushButton('Capture validation  [V]')
+        self.training_button = QtWidgets.QPushButton('Capture  [Space]')
+        self.validation_button = QtWidgets.QPushButton('Validation  [V]')
         self.training_button.clicked.connect(lambda: self.capture('training'))
         self.validation_button.clicked.connect(lambda: self.capture('validation'))
         controls.addWidget(self.training_button)
         controls.addWidget(self.validation_button)
-        self.auto = QtWidgets.QCheckBox('Auto-capture new poses')
+        self.auto = QtWidgets.QCheckBox('Auto-capture')
         self.auto.setToolTip('Save new training coverage as soon as consecutive detections are steady. No fixed cooldown; repeated poses are skipped. Validation is always manual.')
         self.auto.setChecked(args.auto_capture)
         self.auto.toggled.connect(self.set_auto)
@@ -343,50 +348,59 @@ class LiveWindow(QtWidgets.QMainWindow):
         controls.addWidget(self.count_label)
         self.saved_label = label('No poses saved yet.', 'muted')
         controls.addWidget(self.saved_label)
-        help_button = QtWidgets.QPushButton('Capture walkthrough')
+        help_button = QtWidgets.QPushButton('Help')
         help_button.clicked.connect(self.show_walkthrough)
         controls.addWidget(help_button)
-        self.solve_button = QtWidgets.QPushButton('Calibrate captures  [C]')
+        self.solve_button = QtWidgets.QPushButton('Calibrate  [C]')
         self.solve_button.clicked.connect(self.solve)
         controls.addWidget(self.solve_button)
         self.cancel_button = QtWidgets.QPushButton('Cancel calibration')
         self.cancel_button.clicked.connect(self.cancel_solve)
         self.cancel_button.setVisible(False)
         controls.addWidget(self.cancel_button)
-        self.solve_status = label('Collect varied poses in each camera, including shared views.', 'muted')
+        self.solve_status = label('Collect poses to begin.', 'muted')
         controls.addWidget(self.solve_status)
         controls.addStretch()
-        self.session_label = label('A new session is saved when acquisition starts.', 'muted')
+        self.session_label = label('No session', 'muted')
         self.session_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
         controls.addWidget(self.session_label)
         body.addWidget(sidebar)
         main = QtWidgets.QVBoxLayout()
         session_controls = QtWidgets.QHBoxLayout()
-        self.pause_button = QtWidgets.QPushButton('Pause capture')
+        self.pause_button = QtWidgets.QPushButton('Pause')
         self.pause_button.setCheckable(True)
         self.pause_button.setToolTip('Pause training and validation capture; previews and detection continue. An in-progress disk save may finish.')
         self.pause_button.toggled.connect(self.pause_capture)
-        self.new_button = QtWidgets.QPushButton('New calibration')
+        self.new_button = QtWidgets.QPushButton('New session')
         self.new_button.clicked.connect(self.new_session)
-        self.load_session_button = QtWidgets.QPushButton('Open saved session…')
+        self.load_session_button = QtWidgets.QPushButton('Open session…')
         self.load_session_button.clicked.connect(self.open_session)
-        self.save_button = QtWidgets.QPushButton('Save calibration as…')
+        self.save_button = QtWidgets.QPushButton('Save calibration…')
         self.save_button.clicked.connect(self.save_calibration)
         for button in (self.pause_button, self.new_button, self.load_session_button, self.save_button):
             session_controls.addWidget(button)
+        for button, icon in ((self.pause_button, QtWidgets.QStyle.SP_MediaPause),
+                             (self.new_button, QtWidgets.QStyle.SP_FileIcon),
+                             (self.load_session_button, QtWidgets.QStyle.SP_DialogOpenButton),
+                             (self.save_button, QtWidgets.QStyle.SP_DialogSaveButton)):
+            button.setIcon(self.style().standardIcon(icon))
+        self.new_button.setToolTip('Start a new calibration session; preserve the current session on disk.')
+        self.load_session_button.setToolTip('Restore saved captures and coverage.')
+        self.save_button.setToolTip('Export camera parameters as JSON. Images remain in the session folder.')
         main.addLayout(session_controls)
-        self.guidance = label('Connect cameras to begin. Use the simulated rig to exercise the full workflow.', 'guidance')
+        self.guidance = label('Connect cameras to begin.', 'guidance')
         main.addWidget(self.guidance)
         progress_row = QtWidgets.QHBoxLayout()
-        self.progress_label = label('Capture progress appears after connection.', 'muted')
+        self.progress_label = label('Waiting for cameras', 'muted')
         progress_row.addWidget(self.progress_label, 1)
-        self.target_button = QtWidgets.QPushButton('Inspect camera needing poses')
+        self.target_button = QtWidgets.QPushButton('Next camera')
         self.target_button.clicked.connect(self.inspect_target)
         self.target_button.setEnabled(False)
         progress_row.addWidget(self.target_button)
         main.addLayout(progress_row)
-        self.next_step = label('Hold still for each capture; change position and tilt between captures.', 'muted')
-        main.addWidget(self.next_step)
+        self.next_step = label('', 'muted')
+        self.next_step.setWordWrap(False)
+        progress_row.addWidget(self.next_step)
         self.error_label = label('', 'error')
         self.error_label.hide()
         main.addWidget(self.error_label)
@@ -416,9 +430,9 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.inspection_title = label('BOARD INSPECTION', 'muted')
         detail_layout.addWidget(self.inspection_title)
         focus_controls = QtWidgets.QHBoxLayout()
-        self.four_up = QtWidgets.QCheckBox('Four-camera view')
+        self.four_up = QtWidgets.QCheckBox('4-up')
         self.four_up.setChecked(True)
-        self.auto_focus = QtWidgets.QCheckBox('Auto-focus needed views')
+        self.auto_focus = QtWidgets.QCheckBox('Auto-focus')
         self.auto_focus.setChecked(True)
         self.auto_focus.setToolTip('Reconsider the target every 10 seconds. Prefer cameras seeing the board with fewer saved views. Clicking a camera pins it by turning auto-focus off.')
         focus_controls.addWidget(self.four_up)
@@ -449,10 +463,16 @@ class LiveWindow(QtWidgets.QMainWindow):
         detail_layout.addWidget(self.inspection_info)
         self.inspection_advice = label('Select a camera to see its capture advice.', 'muted')
         detail_layout.addWidget(self.inspection_advice)
-        coverage_toggle = QtWidgets.QCheckBox('Show retained training coverage')
+        coverage_toggle = QtWidgets.QCheckBox('Coverage')
         coverage_toggle.setChecked(True)
         coverage_toggle.toggled.connect(self.toggle_coverage)
-        detail_layout.addWidget(coverage_toggle)
+        overlay_controls = QtWidgets.QHBoxLayout()
+        overlay_controls.addWidget(coverage_toggle)
+        ids_toggle = QtWidgets.QCheckBox('Corner IDs')
+        ids_toggle.toggled.connect(self.toggle_corner_ids)
+        overlay_controls.addWidget(ids_toggle)
+        overlay_controls.addStretch()
+        detail_layout.addLayout(overlay_controls)
         upper.addWidget(detail)
         upper.setSizes([650, 550])
         lower = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
@@ -479,12 +499,17 @@ class LiveWindow(QtWidgets.QMainWindow):
         vertical = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         vertical.addWidget(upper)
         vertical.addWidget(lower)
-        vertical.setSizes([570, 250])
+        vertical.setSizes([750, 150])
         main.addWidget(vertical, 1)
         body.addLayout(main, 1)
         outer.addLayout(body, 1)
-        self.footer = label('Metric accuracy unverified · pixel residuals describe image agreement, not millimetre accuracy.', 'muted')
-        outer.addWidget(self.footer)
+        self.footer = label('Accuracy unverified', 'muted')
+        self.footer.setToolTip('Pixel residuals describe image agreement, not millimetre accuracy.')
+        footer_row = QtWidgets.QHBoxLayout()
+        footer_row.addWidget(self.footer)
+        footer_row.addStretch()
+        footer_row.addWidget(self.mode_badge)
+        outer.addLayout(footer_row)
         self.setCentralWidget(root)
         for key, callback in [('Space', lambda: self.capture('training')), ('V', lambda: self.capture('validation')), ('C', self.solve)]:
             shortcut = QtWidgets.QShortcut(QtGui.QKeySequence(key), self)
@@ -523,7 +548,8 @@ class LiveWindow(QtWidgets.QMainWindow):
     def pause_capture(self, paused):
         if self.engine:
             self.engine.set_paused(paused)
-        self.pause_button.setText('Resume capture' if paused else 'Pause capture')
+        self.pause_button.setText('Resume' if paused else 'Pause')
+        self.pause_button.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_MediaPlay if paused else QtWidgets.QStyle.SP_MediaPause))
 
     def switch_session(self, configure):
         self.cancel_solve()
@@ -531,7 +557,7 @@ class LiveWindow(QtWidgets.QMainWindow):
         if self.engine and self.engine.running():
             self.engine.set_paused(True)
             self.engine.stop()
-            self.guidance.setText('Switching sessions: restoring camera settings. Saved captures are retained.')
+            self.guidance.setText('Switching session…')
         # refresh invokes configure only after the old engine releases the cameras.
 
     def new_session(self):
@@ -724,11 +750,17 @@ class LiveWindow(QtWidgets.QMainWindow):
             obs = packet['observations'].get(serial)
             frame = packet['batch'].frames.get(serial)
             count = len(obs['ids']) if obs else 0
+            self.quad_labels[i].setToolTip(inspection_advice(obs, packet.get('novel', {}).get(serial, True)))
             self.quad_labels[i].setText(f"{serial} · {count}/{self.board.num_points} · {packet['coverage']['views'][serial]} poses\n{ranked.get(serial, 'Scout: overlap not established')}")
             view.image = as_image(frame.image, 640) if frame else None
             view.observation = dict(obs, image_size=frame.image.shape[1::-1]) if obs and frame else None
             view.cells = packet['coverage']['cells'][serial]
             view.prediction = (getattr(self, 'prediction', None) or {}).get('predictions', {}).get(serial)
+            view.update()
+
+    def toggle_corner_ids(self, enabled):
+        for view in [self.inspection, *self.quad_views]:
+            view.show_ids = enabled
             view.update()
 
     def toggle_coverage(self, enabled):
@@ -747,7 +779,7 @@ class LiveWindow(QtWidgets.QMainWindow):
             self.fail(str(exc))
 
     def show_walkthrough(self):
-        QtWidgets.QMessageBox.information(self, 'Capture walkthrough',
+        QtWidgets.QMessageBox.information(self, 'Help',
             f'1. Use a rigid board matching the loaded configuration ({self.board.square_length*1000:g} mm squares). Keep focus and zoom fixed.\n\n'
             '2. Select a camera. Face the pattern toward it and move closer until corners appear. '
             'Start at waist/chest height with an upward tilt; camera height is not required.\n\n'
@@ -810,7 +842,9 @@ class LiveWindow(QtWidgets.QMainWindow):
             if serial == prediction['reference']:
                 detail += ' (pose-fit view)'
         self.inspection_info.setText(detail)
+        self.inspection_info.setVisible(not self.four_up.isChecked())
         self.inspection_advice.setText(inspection_advice(observation, packet.get('novel', {}).get(serial, True)))
+        self.inspection_advice.setVisible(not self.four_up.isChecked())
         self.inspection.update()
 
     def solve(self):
@@ -886,6 +920,7 @@ class LiveWindow(QtWidgets.QMainWindow):
 
     def refresh(self):
         self.poll_solve()
+        self.rig.setVisible(self.result is not None)
         running = self.engine is not None and self.engine.running()
         ready = running and self.engine.session is not None and not self.engine.stop_event.is_set()
         if self.pending_session_action is not None and not running and not self.closing:
@@ -925,7 +960,8 @@ class LiveWindow(QtWidgets.QMainWindow):
             samples = list(session.samples)
             training = sum(r['role'] == 'training' for r in samples)
             self.count_label.setText(f'{training} training · {len(samples)-training} validation')
-            self.session_label.setText(str(session.directory))
+            self.session_label.setText(f'Session · {session.directory.name}')
+            self.session_label.setToolTip(str(session.directory.resolve()))
             self.saved_label.setText(state['status'] if samples else 'No poses saved yet.')
         batch, packet = state['batch'], state['packet']
         if packet is None:
@@ -983,14 +1019,16 @@ class LiveWindow(QtWidgets.QMainWindow):
             self.guidance.setText(('PAUSED — previews continue; captures stay saved. ' if state['paused'] else pending_text) + packet['guidance'])
             progress = capture_progress(packet['coverage'], packet.get('validation_views', {}), self.seed is not None)
             self.progress_label.setText(
-                f"{progress['ready']}/{progress['total']} cameras have {progress['minimum']} varied training views · "
-                f"{len(progress['groups'])} camera group(s) · {progress['validation_cameras']}/{progress['total']} with validation views")
+                f"Views ≥{progress['minimum']}: {progress['ready']}/{progress['total']} · "
+                f"Groups: {len(progress['groups'])} · Validation: {progress['validation_cameras']}/{progress['total']}")
             self.progress_label.setToolTip('Capture planning only: the solver also checks pose estimates and connectivity. '
                 'Validation needs another camera to predict held-out corners.\nGroups: ' +
                 ' | '.join(', '.join(group) for group in progress['groups']))
             visible = sum(bool(o['usable']) for o in packet['observations'].values())
-            still = 'steady in consecutive detections' if packet['stationary'] else 'hold still for capture'
-            self.next_step.setText(f'{visible} cameras see usable corners · {still}. ' + progress['action'])
+            still = '● Steady' if packet['stationary'] else '○ Hold still'
+            self.next_step.setText(f'{visible} detecting · {still}')
+            self.next_step.setToolTip(progress['action'])
+            self.target_button.setToolTip(progress['action'])
             self.target_button.setEnabled(bool(progress['target']))
             for serial, tile in self.tiles.items():
                 observation = packet['observations'].get(serial)
@@ -1025,11 +1063,11 @@ class LiveWindow(QtWidgets.QMainWindow):
             self.last_packet = packet
         if packet:
             age = time.monotonic() - packet['analyzed_at']
-            self.inspection_title.setText(f'BOARD INSPECTION · {self.selected} · analyzed {age:.1f}s ago')
+            self.inspection_title.setText(f'INSPECT · {self.selected} · {age:.1f}s')
         if self.pause_button.isChecked():
-            self.guidance.setText('PAUSED — previews and detection continue. Resume capture when ready; an in-progress save may finish.')
+            self.guidance.setText('PAUSED — previews and detection continue. Resume when ready; an in-progress save may finish.')
         if switching:
-            self.guidance.setText('Switching sessions: restoring camera settings. Saved captures are retained.')
+            self.guidance.setText('Switching session…')
         if not running:
             self.mode_badge.setText('DISCONNECTED · retained session')
 

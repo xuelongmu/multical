@@ -13,6 +13,7 @@ from multical.board import load_config
 from multical.io.interop import load_seed, validate_seed_geometry
 from .calibration import solve_process
 from .engine import LiveEngine
+from .guidance import capture_progress, inspection_advice
 from .metrics import GRID, live_projection
 from .session import write_result
 from .sources import PySpinSource, SimulatedSource
@@ -337,6 +338,11 @@ class LiveWindow(QtWidgets.QMainWindow):
         controls.addWidget(self.auto)
         self.count_label = label('0 training · 0 validation', 'muted')
         controls.addWidget(self.count_label)
+        self.saved_label = label('No poses saved yet.', 'muted')
+        controls.addWidget(self.saved_label)
+        help_button = QtWidgets.QPushButton('Capture walkthrough')
+        help_button.clicked.connect(self.show_walkthrough)
+        controls.addWidget(help_button)
         self.solve_button = QtWidgets.QPushButton('Calibrate captures  [C]')
         self.solve_button.clicked.connect(self.solve)
         controls.addWidget(self.solve_button)
@@ -354,6 +360,16 @@ class LiveWindow(QtWidgets.QMainWindow):
         main = QtWidgets.QVBoxLayout()
         self.guidance = label('Connect cameras to begin. Use the simulated rig to exercise the full workflow.', 'guidance')
         main.addWidget(self.guidance)
+        progress_row = QtWidgets.QHBoxLayout()
+        self.progress_label = label('Capture progress appears after connection.', 'muted')
+        progress_row.addWidget(self.progress_label, 1)
+        self.target_button = QtWidgets.QPushButton('Inspect camera needing poses')
+        self.target_button.clicked.connect(self.inspect_target)
+        self.target_button.setEnabled(False)
+        progress_row.addWidget(self.target_button)
+        main.addLayout(progress_row)
+        self.next_step = label('Hold still for each capture; change position and tilt between captures.', 'muted')
+        main.addWidget(self.next_step)
         self.error_label = label('', 'error')
         self.error_label.hide()
         main.addWidget(self.error_label)
@@ -380,6 +396,8 @@ class LiveWindow(QtWidgets.QMainWindow):
         detail_layout.addWidget(self.inspection, 1)
         self.inspection_info = label('Green: detected corners · amber: predicted corners from another camera', 'muted')
         detail_layout.addWidget(self.inspection_info)
+        self.inspection_advice = label('Select a camera to see its capture advice.', 'muted')
+        detail_layout.addWidget(self.inspection_advice)
         coverage_toggle = QtWidgets.QCheckBox('Show retained training coverage')
         coverage_toggle.setChecked(True)
         coverage_toggle.toggled.connect(self.toggle_coverage)
@@ -394,11 +412,13 @@ class LiveWindow(QtWidgets.QMainWindow):
         lower.addWidget(self.rig)
         self.tabs = QtWidgets.QTabWidget()
         self.metrics = QtWidgets.QTableWidget(0, 6)
-        self.metrics.setHorizontalHeaderLabels(['Camera', 'Poses', 'Coverage', 'Train px', 'Test px', 'Test n'])
+        self.metrics.setHorizontalHeaderLabels(['Camera', 'Varied poses', 'Coverage', 'Train px', 'Test px', 'Test n'])
         self.metrics.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
         self.metrics.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.metrics.setAlternatingRowColors(True)
         self.metrics.verticalHeader().hide()
+        self.metrics.cellClicked.connect(lambda row, col: self.select(self.metrics.item(row, 0).text()))
+        self.metrics.setToolTip('Click a row to inspect that camera. Pose counts and coverage describe capture diversity, not accuracy.')
         self.overlaps = QtWidgets.QTableWidget()
         self.overlaps.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.tabs.addTab(self.metrics, 'Coverage & residuals')
@@ -522,6 +542,27 @@ class LiveWindow(QtWidgets.QMainWindow):
         except ValueError as exc:
             self.fail(str(exc))
 
+    def show_walkthrough(self):
+        QtWidgets.QMessageBox.information(self, 'Capture walkthrough',
+            f'1. Use a rigid board matching the loaded configuration ({self.board.square_length*1000:g} mm squares). Keep focus and zoom fixed.\n\n'
+            '2. Select a camera. Face the pattern toward it and move closer until corners appear. '
+            'Start at waist/chest height with an upward tilt; camera height is not required.\n\n'
+            '3. Hold still, then Space saves training. Move between captures: vary image position, tilt and distance. '
+            'Auto-capture saves new training coverage after consecutive stable detections.\n\n'
+            '4. Share several poses between neighbouring cameras and across the volume. '
+            'All cameras need to belong to one connected group; they need not all see the board at once.\n\n'
+            '5. Collect varied views for every camera. The displayed minimum is only a starting point. '
+            'Reserve different poses with V, visible in two or more cameras.\n\n'
+            '6. Press C to calibrate. Inspect validation errors and missing predictions. '
+            'Low pixel errors do not certify millimetre accuracy.')
+
+    def inspect_target(self):
+        if self.last_packet:
+            progress = capture_progress(self.last_packet['coverage'],
+                                        self.last_packet.get('validation_views', {}), self.seed is not None)
+            if progress['target']:
+                self.select(progress['target'])
+
     def select(self, serial):
         self.selected = serial
         for s, tile in self.tiles.items():
@@ -536,6 +577,8 @@ class LiveWindow(QtWidgets.QMainWindow):
         frame = packet['batch'].frames.get(serial)
         if frame is None or observation is None:
             self.inspection.image = None
+            self.inspection_info.setText('No analyzed frame for this camera.')
+            self.inspection_advice.setText(inspection_advice(None, False))
             self.inspection.update()
             return
         self.inspection.image = as_image(frame.image)
@@ -554,6 +597,7 @@ class LiveWindow(QtWidgets.QMainWindow):
             if serial == prediction['reference']:
                 detail += ' (pose-fit view)'
         self.inspection_info.setText(detail)
+        self.inspection_advice.setText(inspection_advice(observation, packet.get('novel', {}).get(serial, True)))
         self.inspection.update()
 
     def solve(self):
@@ -651,6 +695,7 @@ class LiveWindow(QtWidgets.QMainWindow):
             training = sum(r['role'] == 'training' for r in samples)
             self.count_label.setText(f'{training} training · {len(samples)-training} validation')
             self.session_label.setText(str(session.directory))
+            self.saved_label.setText(state['status'] if samples else 'No poses saved yet.')
         batch, packet = state['batch'], state['packet']
         if self.seed is not None and not self.seed_checked and batch and len(batch.frames) == len(batch.serials):
             try:
@@ -681,7 +726,8 @@ class LiveWindow(QtWidgets.QMainWindow):
                 tile.missing = frame is None
                 if frame:
                     tile.image = as_image(frame.image, 360)
-                    tile.detail = f'#{frame.frame_id} · {frame.exposure_us:g} µs'
+                    if packet is None:
+                        tile.detail = 'Waiting for detection'
                 else:
                     tile.detail = 'MISSING FRAME'
                 tile.update()
@@ -701,7 +747,25 @@ class LiveWindow(QtWidgets.QMainWindow):
             self.rig.target = self.prediction
             self.rig.update()
             self.update_inspection(packet)
-            self.guidance.setText(('Capture queued: waiting for a usable synchronized pose. ' if state['pending'] else '') + packet['guidance'])
+            pending_text = f"{state['pending'].capitalize()} queued: " if state['pending'] else ''
+            self.guidance.setText(pending_text + packet['guidance'])
+            progress = capture_progress(packet['coverage'], packet.get('validation_views', {}), self.seed is not None)
+            self.progress_label.setText(
+                f"{progress['ready']}/{progress['total']} cameras have {progress['minimum']} varied training views · "
+                f"{len(progress['groups'])} camera group(s) · {progress['validation_cameras']}/{progress['total']} with validation views")
+            self.progress_label.setToolTip('Capture planning only: the solver also checks pose estimates and connectivity. '
+                'Validation needs another camera to predict held-out corners.\nGroups: ' +
+                ' | '.join(', '.join(group) for group in progress['groups']))
+            visible = sum(bool(o['usable']) for o in packet['observations'].values())
+            still = 'steady in consecutive detections' if packet['stationary'] else 'hold still for capture'
+            self.next_step.setText(f'{visible} cameras see usable corners · {still}. ' + progress['action'])
+            self.target_button.setEnabled(bool(progress['target']))
+            for serial, tile in self.tiles.items():
+                observation = packet['observations'].get(serial)
+                if observation is not None:
+                    tile.detail = f"{len(observation['ids'])}/{self.board.num_points} corners · {packet['coverage']['views'][serial]} poses"
+                    tile.setToolTip(inspection_advice(observation, packet.get('novel', {}).get(serial, True)))
+                    tile.update()
             serials = packet['batch'].serials
             coverage = packet['coverage']
             self.metrics.setRowCount(len(serials))

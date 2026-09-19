@@ -1,5 +1,7 @@
 Multical Live is a standalone Qt interface for direct FLIR acquisition, visual board feedback, retained coverage, and background calibration. It does not require Captury, exported video, or an image import step.
 
+The operator guide shows live corner counts on camera previews, selected-camera advice, saved-pose confirmation, and a **Capture walkthrough**. **Inspect camera needing poses** selects the camera with the fewest varied training views (breaking ties by image coverage); clicking a metrics row also selects that camera. The progress strip reports cameras with 12 varied views (3 with a seed), connected camera groups from retained shared detections, and cameras with validation views. Hover over it to see group membership. These are capture-planning indicators, not accuracy acceptance gates: pose initialization can still reject observations, and graph connectivity does not measure conditioning. Validation requires another camera seeing the target; a validation-view count alone does not establish successful independent predictions. The next-step text reports consecutive-detection steadiness, which is a movement hint rather than a physical stillness guarantee.
+
 ![Live simulation after calibration, with camera previews, detected and predicted corners, coverage, rig geometry, and validation residuals](screenshots/live_calibration.png)
 
 Run from this worktree:

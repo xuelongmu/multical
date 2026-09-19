@@ -124,6 +124,8 @@ class LiveEngine:
                         packet['guidance'] = 'Move to a different board pose. Training and validation poses are kept separate.'
                     packet['coverage'] = self.coverage.snapshot()
                     packet['stationary'] = stationary
+                    packet['validation_views'] = self.validation_coverage.views.copy()
+                    packet['novel'] = {s: self.coverage.novel(s, o) for s, o in observations.items()}
                     self.previous = packet
                     with self.lock:
                         self.packet = packet

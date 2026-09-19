@@ -26,7 +26,6 @@ class LiveEngine:
         self.error = None
         self.pending_capture = None
         self.auto_capture = False
-        self.last_saved = 0.
         self.previous = None
         self.captured_sequence = -1
         self.threads = []
@@ -122,7 +121,7 @@ class LiveEngine:
                     with self.lock:
                         role = requested_role = self.pending_capture
                         automatic = self.auto_capture
-                    if automatic and novelty and stationary and now - self.last_saved >= 1.:
+                    if automatic and novelty and stationary:
                         role = role or 'training'
                     partition_conflict = (role == 'validation' and self.coverage.matches_pose(observations)) or \
                                          (role == 'training' and self.validation_coverage.matches_pose(observations))
@@ -133,7 +132,6 @@ class LiveEngine:
                         else:
                             self.validation_coverage.add(observations)
                         self.captured_sequence = batch.sequence
-                        self.last_saved = now
                         with self.lock:
                             if requested_role == self.pending_capture:
                                 self.pending_capture = None

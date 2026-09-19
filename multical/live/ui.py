@@ -334,7 +334,7 @@ class LiveWindow(QtWidgets.QMainWindow):
         controls.addWidget(self.training_button)
         controls.addWidget(self.validation_button)
         self.auto = QtWidgets.QCheckBox('Auto-capture new poses')
-        self.auto.setToolTip('Retain new training coverage after consecutive stationary detections. Validation is always manual.')
+        self.auto.setToolTip('Save new training coverage as soon as consecutive detections are steady. No fixed cooldown; repeated poses are skipped. Validation is always manual.')
         self.auto.setChecked(args.auto_capture)
         self.auto.toggled.connect(self.set_auto)
         controls.addWidget(self.auto)

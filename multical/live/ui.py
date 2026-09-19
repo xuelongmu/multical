@@ -227,6 +227,7 @@ class RigView(QtWidgets.QWidget):
         self.validation_views, self.observations, self.hit_points = {}, {}, {}
         self.drag = None
         self.setMouseTracking(True)
+        self.setToolTip('Grid: calibration Y=0 plane, not a measured stage floor.\nDotted lines show camera height relative to that plane. Axes and spacing are in metres.')
         self.setMinimumSize(280, 170)
         self.reset_button = QtWidgets.QToolButton(self)
         self.reset_button.setText('↺')
@@ -306,7 +307,9 @@ class RigView(QtWidgets.QWidget):
         poses = {s: np.array(v) for s, v in self.result['camera_poses'].items()}
         centres = {s: -v[:3, :3].T @ v[:3, 3] for s, v in poses.items()}
         targets = [np.array(v)[:3, 3] for v in self.result['frame_poses'].values()]
-        points = np.array(list(centres.values()) + targets)
+        # Include the origin and camera footprints so reset fits the reference plane.
+        footprints = [np.array([v[0], 0., v[2]]) for v in centres.values()]
+        points = np.array(list(centres.values()) + targets + footprints + [np.zeros(3)])
         centre = (points.min(0) + points.max(0)) / 2
         span = max(float(np.ptp(points, axis=0).max()), .5)
         cy, sy, cp, sp = math.cos(self.yaw), math.sin(self.yaw), math.cos(self.pitch), math.sin(self.pitch)
@@ -317,10 +320,33 @@ class RigView(QtWidgets.QWidget):
         def project(point):
             transformed = rotation @ (point-centre)
             return QtCore.QPointF(self.width()/2 + transformed[0]*scale, self.height()/2 - transformed[1]*scale)
-        p.setPen(QtGui.QPen(QtGui.QColor('#3b3b3b'), 1))
-        for a in np.linspace(-span, span, 9):
-            p.drawLine(project(np.array([a, 0, -span])+centre), project(np.array([a, 0, span])+centre))
-            p.drawLine(project(np.array([-span, 0, a])+centre), project(np.array([span, 0, a])+centre))
+        raw_step = span / 10
+        magnitude = 10 ** math.floor(math.log10(raw_step))
+        step = next(v * magnitude for v in (1, 2, 5, 10) if v * magnitude >= raw_step)
+        low = np.floor(points.min(0) / step) * step
+        high = np.ceil(points.max(0) / step) * step
+        p.setPen(QtGui.QPen(QtGui.QColor('#343434'), 1))
+        for x in np.arange(low[0], high[0] + step*.5, step):
+            p.drawLine(project([x, 0, low[2]]), project([x, 0, high[2]]))
+        for z in np.arange(low[2], high[2] + step*.5, step):
+            p.drawLine(project([low[0], 0, z]), project([high[0], 0, z]))
+        # Subtle plumb lines reveal camera height relative to the Y=0 plane.
+        p.setPen(QtGui.QPen(QtGui.QColor('#494949'), 1, QtCore.Qt.DotLine))
+        for pos, foot in zip(centres.values(), footprints):
+            p.drawLine(project(pos), project(foot))
+        axis_colors = ['#cb7777', '#85ba85', '#7e9fd0']
+        origin = project(np.zeros(3))
+        for index, name in enumerate(('X', 'Y', 'Z')):
+            endpoint = np.zeros(3)
+            endpoint[index] = step * 2
+            p.setPen(QtGui.QPen(QtGui.QColor(axis_colors[index]), 1.5))
+            tip = project(endpoint)
+            p.drawLine(origin, tip)
+            p.drawText(tip + QtCore.QPointF(4, -4), '+' + name)
+        p.setPen(QtGui.QColor('#bbbbbb'))
+        p.setBrush(QtCore.Qt.NoBrush)
+        p.drawEllipse(origin, 3, 3)
+        p.drawText(origin + QtCore.QPointF(5, 12), '0')
         for target in targets:
             p.setPen(QtGui.QColor('#aaaaaa'))
             p.drawEllipse(project(target), 2, 2)
@@ -360,6 +386,7 @@ class RigView(QtWidgets.QWidget):
         p.setPen(QtGui.QColor('#aaaaaa'))
         missing = sum(self.camera_status(s)[0] == '#888888' for s in poses)
         p.drawText(12, 20, f'World · {missing}/{len(poses)} no poses')
+        p.drawText(12, 36, f'Grid {step:g} m · Y=0 reference')
         x, y = 12, self.height() - (28 if self.width() < 380 else 10)
         for color, title in [('#888888', 'No poses'), ('#ffb45f', 'Pending'), ('#69bafa', 'Evaluated'), ('#ee8d86', 'Failed')]:
             p.setPen(QtGui.QColor(color))

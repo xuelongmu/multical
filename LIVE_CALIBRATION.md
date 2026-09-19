@@ -78,7 +78,7 @@ The unit/integration suite covers dropped and stale frames, exposure midpoint mi
 
 CaptureNet-derived behavior is attributed in `multical/live/sources.py` to `/home/zerospace/capturenet/scripts/fire3.py`: scheduled Action0 keys, multi-interface broadcasts, PTP checks, and the end-of-exposure timestamp convention. No CaptureNet script is executed by this application.
 
-Auto-capture has no fixed cooldown: each newly useful, steady observation is eligible as soon as detection finishes. Capture validity, duplicate-pose checks and training/validation separation still apply. Image saving remains synchronous with analysis, so actual capture throughput depends on acquisition, detection and disk writes. Validation remains manual.
+Auto-capture has no fixed cooldown: each newly useful, steady observation is eligible as soon as detection finishes. Capture validity, duplicate-pose checks and training/validation separation still apply. Image saving remains synchronous with analysis, so actual capture throughput depends on acquisition, detection and disk writes. Validation may be captured manually or with auto-capture set to Validation.
 
 Session controls are above the camera wall:
 
@@ -93,3 +93,5 @@ New/open/load wait for acquisition to stop and camera settings to restore before
 The compact interface uses neutral charcoal surfaces and no title banner. Camera settings are in a collapsed drawer; session actions use short labels with standard icons. Detailed guidance is available in tooltips and Help. The live status row summarizes view counts, connectivity and detection steadiness. Corner IDs are off by default and can be enabled beside Coverage. The empty rig panel is hidden until a calibration is loaded or fitted, and the preview area receives most of the initial vertical space. Pane dividers remain adjustable.
 
 **Load calibration…** now also imports native Captury `.calib` files directly. Connect the full camera roster first: live native resolution and MAC addresses are required to resolve Captury identities safely. No intermediate conversion command is needed. The importer preserves the source file and starts a separate seeded session; use validation captures to assess it before refinement. JSON imports remain available.
+
+The selector below **Auto-capture** chooses **Training** or **Validation**. Automatic validation requires at least two usable camera detections, consecutive steadiness, new validation coverage, and no overlap with retained training poses. It does not fit the seed or convert training records into validation. Pause applies to both roles. Manual Space/V retain their fixed roles. CLI: `--auto-capture --auto-capture-role validation`.

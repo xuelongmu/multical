@@ -26,6 +26,7 @@ class LiveEngine:
         self.error = None
         self.pending_capture = None
         self.auto_capture = False
+        self.auto_capture_role = 'training'
         self.paused = False
         self.previous = None
         self.captured_sequence = -1
@@ -105,7 +106,6 @@ class LiveEngine:
                     packet = dict(batch=batch, observations=observations, analyzed_at=now,
                                   problems=problems)
                     usable = any(o['usable'] for o in observations.values())
-                    novelty = any(self.coverage.novel(s, o) for s, o in observations.items())
                     # Demand consecutive stationary observations for automatic retention.
                     stationary = False
                     if self.previous is not None:
@@ -121,9 +121,8 @@ class LiveEngine:
                         stationary = bool(movements) and max(movements) < 1.0
                     with self.lock:
                         role = requested_role = self.pending_capture
-                        automatic = self.auto_capture and not self.paused
-                    if automatic and novelty and stationary:
-                        role = role or 'training'
+                        if role is None:
+                            role = self.automatic_role(observations, stationary)
                     partition_conflict = (role == 'validation' and self.coverage.matches_pose(observations)) or \
                                          (role == 'training' and self.validation_coverage.matches_pose(observations))
                     if role and not self.paused and usable and not problems and not partition_conflict and batch.sequence != self.captured_sequence:
@@ -137,7 +136,8 @@ class LiveEngine:
                             if requested_role == self.pending_capture:
                                 self.pending_capture = None
                             self.status = f"Saved {role} pose {record['id']}"
-                    packet['guidance'] = self.coverage.guidance(observations, problems)
+                    guiding = self.validation_coverage if self.auto_capture and self.auto_capture_role == 'validation' else self.coverage
+                    packet['guidance'] = guiding.guidance(observations, problems)
                     if partition_conflict:
                         packet['guidance'] = 'Move to a different board pose. Training and validation poses are kept separate.'
                     packet['coverage'] = self.coverage.snapshot()
@@ -151,6 +151,20 @@ class LiveEngine:
                     with self.lock:
                         self.error = f'Detection/capture failed: {exc}'
                     self.stop_event.set()
+
+    def automatic_role(self, observations, stationary):
+        if not self.auto_capture or self.paused or not stationary:
+            return None
+        role = self.auto_capture_role
+        if role not in ('training', 'validation'):
+            return None
+        if role == 'validation' and sum(bool(o['usable']) for o in observations.values()) < 2:
+            return None
+        coverage = self.coverage if role == 'training' else self.validation_coverage
+        other = self.validation_coverage if role == 'training' else self.coverage
+        if other.matches_pose(observations):
+            return None
+        return role if any(coverage.novel(s, o) for s, o in observations.items() if o['usable']) else None
 
     def set_paused(self, paused):
         with self.lock:

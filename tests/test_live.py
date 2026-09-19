@@ -272,6 +272,29 @@ class CoverageAndSessionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'already been retained'):
                 session.add(packet, 'training')
 
+    def test_auto_validation_requires_shared_steady_novel_nontraining_pose(self):
+        from multical.live.engine import LiveEngine
+        packet = self.packet()
+        engine = LiveEngine(Mock(), self.board, BOARD, '/tmp/unused')
+        engine.coverage = Coverage(packet['batch'].serials)
+        engine.validation_coverage = Coverage(packet['batch'].serials)
+        engine.auto_capture = True
+        engine.auto_capture_role = 'validation'
+        observations = packet['observations']
+        self.assertIsNone(engine.automatic_role(observations, False))
+        single = copy.deepcopy(observations)
+        single[next(iter(single))]['usable'] = False
+        self.assertIsNone(engine.automatic_role(single, True))
+        self.assertEqual(engine.automatic_role(observations, True), 'validation')
+        engine.validation_coverage.add(observations)
+        self.assertIsNone(engine.automatic_role(observations, True))
+        engine.validation_coverage = Coverage(packet['batch'].serials)
+        engine.coverage.add(observations)
+        self.assertIsNone(engine.automatic_role(observations, True))
+        engine.coverage = Coverage(packet['batch'].serials)
+        engine.set_paused(True)
+        self.assertIsNone(engine.automatic_role(observations, True))
+
     def test_pause_clears_queued_capture_and_blocks_manual_requests(self):
         from multical.live.engine import LiveEngine
         engine = LiveEngine(Mock(), self.board, BOARD, '/tmp/unused')

@@ -361,10 +361,17 @@ class LiveWindow(QtWidgets.QMainWindow):
         controls.addWidget(self.training_button)
         controls.addWidget(self.validation_button)
         self.auto = QtWidgets.QCheckBox('Auto-capture')
-        self.auto.setToolTip('Save new training coverage as soon as consecutive detections are steady. No fixed cooldown; repeated poses are skipped. Validation is always manual.')
+        self.auto.setToolTip('Save new steady poses in the selected role. Validation needs two usable cameras and stays separate from training.')
         self.auto.setChecked(args.auto_capture)
         self.auto.toggled.connect(self.set_auto)
         controls.addWidget(self.auto)
+        self.auto_role = QtWidgets.QComboBox()
+        self.auto_role.addItem('Training', 'training')
+        self.auto_role.addItem('Validation', 'validation')
+        self.auto_role.setCurrentIndex(1 if getattr(args, 'auto_capture_role', 'training') == 'validation' else 0)
+        self.auto_role.setToolTip('Role for automatic captures. Manual Space and V keep their usual roles.')
+        self.auto_role.currentIndexChanged.connect(self.set_auto_role)
+        controls.addWidget(self.auto_role)
         self.count_label = label('0 training · 0 validation', 'muted')
         controls.addWidget(self.count_label)
         self.saved_label = label('No poses saved yet.', 'muted')
@@ -734,9 +741,15 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.engine = LiveEngine(source, self.board, self.board_file, self.args.output, self.args.workers,
                                  capture_mode=capture_mode, resume=getattr(self.args, 'resume', None))
         self.engine.auto_capture = self.auto.isChecked()
+        self.engine.auto_capture_role = self.auto_role.currentData()
         self.engine.set_paused(self.pause_button.isChecked())
         self.engine.start()
         self.mode_badge.setText('SIMULATION · generated images' if demo else 'LIVE · direct PySpin')
+
+    def set_auto_role(self, _index):
+        if self.engine:
+            with self.engine.lock:
+                self.engine.auto_capture_role = self.auto_role.currentData()
 
     def set_auto(self, enabled):
         if self.engine:
@@ -841,7 +854,7 @@ class LiveWindow(QtWidgets.QMainWindow):
             '2. Select a camera. Face the pattern toward it and move closer until corners appear. '
             'Start at waist/chest height with an upward tilt; camera height is not required.\n\n'
             '3. Hold still, then Space saves training. Move between captures: vary image position, tilt and distance. '
-            'Auto-capture saves new training coverage after consecutive stable detections.\n\n'
+            'Auto-capture saves new steady poses in the selected Training or Validation role.\n\n'
             '4. Share several poses between neighbouring cameras and across the volume. '
             'All cameras need to belong to one connected group; they need not all see the board at once.\n\n'
             '5. Collect varied views for every camera. The displayed minimum is only a starting point. '

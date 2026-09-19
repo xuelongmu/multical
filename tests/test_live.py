@@ -18,7 +18,7 @@ from multical.graph import select_pairs
 from multical.live.calibration import AnchoredPoseSet, solve_snapshot, validate
 from multical.live.metrics import Coverage, observe
 from multical.live.session import Session
-from multical.live.sources import Frame, FrameSet, PySpinSource, SimulatedSource
+from multical.live.sources import Frame, FrameSet, PTPNotReady, PySpinSource, SimulatedSource
 from multical.optimization.calibration import error_stats
 from multical.optimization.parameters import IndexMapper
 from multical.transform.matrix import align_transforms_robust
@@ -36,6 +36,35 @@ def make_record(batch, board, index, role):
 
 
 class SourceTests(unittest.TestCase):
+    def test_ptp_excursion_preserves_preview_but_blocks_capture_until_recovered(self):
+        driver = PySpinSource(expected_serials=('A',), expected_count=1)
+        driver.serials = ('A',)
+        driver.held = [dict(serial='A', cam=struct(GetNodeMap=lambda: None))]
+        driver.deadline = driver.last_ptp = 0
+        driver._ptp = Mock(side_effect=[PTPNotReady('Clock not ready'), None])
+        driver._get = lambda nm, name, kind: {'ExposureTime': 1000, 'Gain': 0, 'TimestampLatchValue': 1_000_000_000}[name]
+        driver._command = Mock()
+        frames = iter([Frame('A', np.ones((10, 10), np.uint8), i, 1_151_000_000, 1000) for i in (1, 2)])
+        driver.pool = struct(submit=lambda *args: struct(result=lambda: next(frames)))
+        with patch('multical.live.sources.time.monotonic', return_value=100.):
+            bad = driver.read()
+        self.assertEqual(len(bad.frames), 1)
+        self.assertTrue(any('Clock not ready' in error for error in bad.problems()))
+        with patch('multical.live.sources.time.monotonic', return_value=104.):
+            good = driver.read()
+        self.assertEqual(good.problems(), [])
+
+    def test_write_only_action_device_key_can_be_set_without_reading(self):
+        driver = PySpinSource()
+        node = Mock()
+        driver.sdk = struct(CIntegerPtr=lambda value: value, IsReadable=lambda value: False,
+                            IsWritable=lambda value: True)
+        nodemap = struct(GetNode=lambda name: node)
+        driver._set(nodemap, 'ActionDeviceKey', 'Integer', 42)
+        node.SetValue.assert_called_once_with(42)
+        with self.assertRaisesRegex(RuntimeError, 'not readable'):
+            driver._get(nodemap, 'ActionDeviceKey', 'Integer')
+
     def batch(self):
         image = np.zeros((100, 100), np.uint8)
         return FrameSet(1, 1_000_000_000, ('A', 'B'),

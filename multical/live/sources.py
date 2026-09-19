@@ -126,6 +126,10 @@ class SimulatedSource:
         pass
 
 
+class PTPNotReady(RuntimeError):
+    """A clock quality failure blocks retention without disabling live preview."""
+
+
 class PySpinSource:
     """Direct PTP + scheduled Action0 capture, based on CaptureNet fire3.py.
 
@@ -143,16 +147,20 @@ class PySpinSource:
         self.sequence = 0
         self.last_ids = {}
         self.sizes = {}
+        self.action_interfaces = []
+        self.ptp_problems = {}
 
     def _check_cancelled(self):
         event = getattr(self, 'stop_event', None)
         if event is not None and event.is_set():
             raise InterruptedError('Camera connection cancelled')
 
-    def _node(self, nm, name, kind):
+    def _node(self, nm, name, kind, access='read'):
         ptr = getattr(self.sdk, f"C{kind}Ptr")(nm.GetNode(name))
-        if not self.sdk.IsReadable(ptr):
-            raise RuntimeError(f"Camera node {name} is not readable")
+        allowed = self.sdk.IsReadable(ptr) if access == 'read' else self.sdk.IsWritable(ptr)
+        if not allowed:
+            mode = 'readable' if access == 'read' else 'writable'
+            raise RuntimeError(f"Camera node {name} is not {mode}")
         return ptr
 
     def _get(self, nm, name, kind):
@@ -160,9 +168,7 @@ class PySpinSource:
         return node.ToString() if kind == "Enumeration" else node.GetValue()
 
     def _set(self, nm, name, kind, value):
-        node = self._node(nm, name, kind)
-        if not self.sdk.IsWritable(node):
-            raise RuntimeError(f"Camera node {name} is not writable")
+        node = self._node(nm, name, kind, access='write')
         if kind == "Enumeration":
             node.SetIntValue(node.GetEntryByName(value).GetValue())
         else:
@@ -177,7 +183,7 @@ class PySpinSource:
         status = self._get(nm, 'GevIEEE1588StatusLatched', 'Enumeration')
         offset = self._get(nm, 'GevIEEE1588OffsetFromMasterLatched', 'Integer')
         if status != 'Slave' or abs(offset) > 1000:
-            raise RuntimeError(f"PTP is {status}, offset {offset} ns; require Slave within 1000 ns")
+            raise PTPNotReady(f"PTP is {status}, offset {offset} ns; require Slave within 1000 ns")
 
     def open(self):
         self._check_cancelled()
@@ -209,6 +215,14 @@ class PySpinSource:
         if missing or len(serials) != self.expected_count or len(set(serials)) != len(serials):
             raise RuntimeError(f"Expected {self.expected_count} distinct cameras; discovered {len(discovered)}, selected {len(set(serials) & set(discovered))}. Missing: {sorted(missing)}")
         self.serials = tuple(serials)
+        # Discovery is expensive. Retain populated interfaces for action commands
+        # instead of rediscovering every network segment on every video frame.
+        for i in range(self.interfaces.GetSize()):
+            iface = self.interfaces[i]
+            cameras = iface.GetCameras()
+            if cameras.GetSize():
+                self.action_interfaces.append(iface)
+            cameras.Clear()
         settings = [('AcquisitionMode', 'Enumeration', 'Continuous'),
                     ('ExposureAuto', 'Enumeration', 'Off'), ('GainAuto', 'Enumeration', 'Off'),
                     ('TriggerSource', 'Enumeration', 'Action0'),
@@ -234,20 +248,25 @@ class PySpinSource:
             self._set(nm, 'TriggerMode', 'Enumeration', 'Off')
             for name, kind, value in settings:
                 self._check_cancelled()
-                old = self._get(nm, name, kind)
-                state['restore'].append((name, kind, old))
+                # GenICam ActionDeviceKey is write-only on the physical FLIRs.
+                # Use the documented fleet key (42); a previous value cannot be
+                # read or restored. Every other setting must remain restorable.
+                if name != 'ActionDeviceKey' or self.sdk.IsReadable(self.sdk.CIntegerPtr(nm.GetNode(name))):
+                    old = self._get(nm, name, kind)
+                    state['restore'].append((name, kind, old))
                 self._set(nm, name, kind, value)
             self._set(nm, 'TriggerMode', 'Enumeration', 'On')
             # Reading exposure must succeed; zero is never a substitute.
             state['exposure'] = self._get(nm, 'ExposureTime', 'Float')
             state['gain'] = self._get(nm, 'Gain', 'Float')
             state['processor'] = self.sdk.ImageProcessor()
-            state['processor'].SetColorProcessing(self.sdk.HQ_LINEAR)
+            state['processor'].SetColorProcessing(self.sdk.SPINNAKER_COLOR_PROCESSING_ALGORITHM_HQ_LINEAR)
             state['settings'] = dict(pixel_format=self._get(nm, 'PixelFormat', 'Enumeration'),
                                      offset_x=self._get(nm, 'OffsetX', 'Integer'),
                                      offset_y=self._get(nm, 'OffsetY', 'Integer'),
                                      reverse_x=self._get(nm, 'ReverseX', 'Boolean'),
                                      reverse_y=self._get(nm, 'ReverseY', 'Boolean'),
+                                     action_device_key=42,
                                      exposure_auto='Off', gain_auto='Off')
             cam.BeginAcquisition()
             state['acquiring'] = True
@@ -277,28 +296,26 @@ class PySpinSource:
         self._check_cancelled()
         self.deadline = time.monotonic() + 1 / self.fps
         if time.monotonic() - self.last_ptp > 3:
+            self.ptp_problems = {}
             for state in self.held:
-                self._ptp(state['cam'])
+                try:
+                    self._ptp(state['cam'])
+                except PTPNotReady as exc:
+                    self.ptp_problems['ptp:' + state['serial']] = f"{state['serial']}: {exc}"
                 state['exposure'] = self._get(state['cam'].GetNodeMap(), 'ExposureTime', 'Float')
                 state['gain'] = self._get(state['cam'].GetNodeMap(), 'Gain', 'Float')
             self.last_ptp = time.monotonic()
         nm = self.held[0]['cam'].GetNodeMap()
         self._command(nm, 'TimestampLatch')
         scheduled = self._get(nm, 'TimestampLatchValue', 'Integer') + 150_000_000
-        for i in range(self.interfaces.GetSize()):
-            iface = self.interfaces[i]
-            cams = iface.GetCameras()
-            count = cams.GetSize()
-            cams.Clear()
-            if not count:
-                continue
+        for iface in self.action_interfaces:
             inm = iface.GetTLNodeMap()
             for name, value in [('GevActionDeviceKey', 42), ('GevActionGroupKey', 1),
                                 ('GevActionGroupMask', 0xFFFFFFFF), ('GevActionTime', scheduled)]:
                 self._set(inm, name, 'Integer', value)
             self._command(inm, 'ActionCommand')
         futures = [(s['serial'], self.pool.submit(self._collect, s)) for s in self.held]
-        frames, errors = {}, {}
+        frames, errors = {}, dict(self.ptp_problems)
         for serial, future in futures:
             try:
                 frame = future.result()
@@ -351,6 +368,7 @@ class PySpinSource:
         if self.camera_list is not None:
             self.camera_list.Clear()
             self.camera_list = None
+        self.action_interfaces.clear()
         if self.interfaces is not None:
             self.interfaces.Clear()
             self.interfaces = None

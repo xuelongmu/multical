@@ -447,6 +447,7 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.auto_validation_attempt = None
         self.evaluated_key = None
         self.last_packet = self.last_batch = None
+        self.previews_paused = False
         self.selected = None
         self.focus_changed_at = 0.
         self.quad_serials = []
@@ -588,7 +589,7 @@ class LiveWindow(QtWidgets.QMainWindow):
         session_controls = QtWidgets.QHBoxLayout()
         self.pause_button = QtWidgets.QPushButton('Pause')
         self.pause_button.setCheckable(True)
-        self.pause_button.setToolTip('Pause training and validation capture; previews and detection continue. An in-progress disk save may finish.')
+        self.pause_button.setToolTip('Pause training and validation capture; detection continues. Preview control is separate. An in-progress disk save may finish.')
         self.pause_button.toggled.connect(self.pause_capture)
         self.new_button = QtWidgets.QPushButton('New session')
         self.new_button.clicked.connect(self.new_session)
@@ -642,7 +643,16 @@ class LiveWindow(QtWidgets.QMainWindow):
         wall_layout = QtWidgets.QVBoxLayout(wall_box)
         wall_layout.setContentsMargins(0, 0, 0, 0)
         self.wall_title = label('CAMERA WALL · live previews', 'muted')
-        wall_layout.addWidget(self.wall_title)
+        wall_header = QtWidgets.QHBoxLayout()
+        wall_header.addWidget(self.wall_title, 1)
+        self.preview_button = QtWidgets.QPushButton('Pause previews')
+        self.preview_button.setCheckable(True)
+        self.preview_button.setIcon(capture_icon(False))
+        self.preview_button.setToolTip('Freeze the camera wall and inspection images. Acquisition, detection and pose saving continue. [P]')
+        self.preview_button.setAccessibleName('Pause previews')
+        self.preview_button.toggled.connect(self.pause_previews)
+        wall_header.addWidget(self.preview_button)
+        wall_layout.addLayout(wall_header)
         self.wall = QtWidgets.QWidget()
         self.wall_grid = QtWidgets.QGridLayout(self.wall)
         self.wall_grid.setContentsMargins(0, 0, 4, 0)
@@ -761,7 +771,8 @@ class LiveWindow(QtWidgets.QMainWindow):
         footer_row.addWidget(self.mode_badge)
         outer.addLayout(footer_row)
         self.setCentralWidget(root)
-        for key, callback in [('Space', lambda: self.capture('training')), ('V', lambda: self.capture('validation')), ('C', self.solve)]:
+        for key, callback in [('Space', lambda: self.capture('training')), ('V', lambda: self.capture('validation')),
+                              ('C', self.solve), ('P', self.preview_button.toggle)]:
             shortcut = QtWidgets.QShortcut(QtGui.QKeySequence(key), self)
             shortcut.activated.connect(callback)
         self.timer = QtCore.QTimer(self)
@@ -799,8 +810,26 @@ class LiveWindow(QtWidgets.QMainWindow):
         if self.engine:
             self.engine.set_paused(paused)
         self.pause_button.setAccessibleName('Resume capture' if paused else 'Pause capture')
-        self.pause_button.setToolTip('Resume capture' if paused else 'Pause capture — previews continue; an in-progress save may finish.')
+        self.pause_button.setToolTip('Resume capture' if paused else 'Pause capture — detection continues; preview control is separate. An in-progress save may finish.')
         self.pause_button.setIcon(capture_icon(paused))
+
+    def pause_previews(self, paused):
+        self.previews_paused = paused
+        action = 'Resume previews' if paused else 'Pause previews'
+        self.preview_button.setText(action)
+        self.preview_button.setAccessibleName(action)
+        self.preview_button.setIcon(capture_icon(paused))
+        self.preview_button.setToolTip(action + ' [P] — acquisition, detection and pose saving continue.')
+        self.auto_focus.setEnabled(not paused)
+        if paused:
+            self.wall_title.setText('CAMERA WALL · previews paused')
+            self.inspection_title.setText('INSPECT · previews paused')
+        else:
+            # Refresh from the latest mailboxes; never replay queued old images.
+            self.last_batch = self.last_packet = None
+            self.wall_title.setText('CAMERA WALL · live previews')
+            self.inspection_title.setText('BOARD INSPECTION')
+        self.refresh()
 
     def switch_session(self, configure):
         self.cancel_solve()
@@ -1032,6 +1061,8 @@ class LiveWindow(QtWidgets.QMainWindow):
             self.update_inspection(self.last_packet)
 
     def update_focus(self, packet):
+        if self.previews_paused:
+            return
         now = time.monotonic()
         if self.auto_focus.isChecked() and now - self.focus_changed_at >= 10:
             group = inspection_group(packet['coverage'], packet['observations'])
@@ -1043,6 +1074,8 @@ class LiveWindow(QtWidgets.QMainWindow):
             self.group_changed_at = now
 
     def update_quad(self, packet):
+        if self.previews_paused:
+            return
         ranked = dict(inspection_group(packet['coverage'], packet['observations'], self.selected, limit=len(packet['coverage']['views'])))
         for i, view in enumerate(self.quad_views):
             if i >= len(self.quad_serials):
@@ -1120,6 +1153,8 @@ class LiveWindow(QtWidgets.QMainWindow):
             self.update_inspection(self.last_packet)
 
     def update_inspection(self, packet):
+        if self.previews_paused:
+            return
         if not self.quad_serials:
             self.quad_serials = [s for s, _ in inspection_group(packet['coverage'], packet['observations'], self.selected)]
             self.group_changed_at = time.monotonic()
@@ -1337,7 +1372,7 @@ class LiveWindow(QtWidgets.QMainWindow):
                 return
         if session and ready:
             self.auto_evaluate(session)
-        if batch and batch is not self.last_batch:
+        if batch and batch is not self.last_batch and not self.previews_paused:
             for index, serial in enumerate(batch.serials):
                 if serial not in self.tiles:
                     tile = CameraTile(serial)
@@ -1375,7 +1410,7 @@ class LiveWindow(QtWidgets.QMainWindow):
             self.update_focus(packet)
             self.update_inspection(packet)
             pending_text = f"{state['pending'].capitalize()} queued: " if state['pending'] else ''
-            self.guidance.setText(('PAUSED — previews continue; captures stay saved. ' if state['paused'] else pending_text) + packet['guidance'])
+            self.guidance.setText(('CAPTURE PAUSED · ' if state['paused'] else pending_text) + packet['guidance'])
             progress = capture_progress(packet['coverage'], packet.get('validation_views', {}), self.seed is not None)
             self.progress_label.setText(
                 f"Views ≥{progress['minimum']}: {progress['ready']}/{progress['total']} · "
@@ -1389,7 +1424,7 @@ class LiveWindow(QtWidgets.QMainWindow):
             self.next_step.setToolTip(progress['action'])
             self.target_button.setToolTip(progress['action'])
             self.target_button.setEnabled(bool(progress['target']))
-            for serial, tile in self.tiles.items():
+            for serial, tile in (() if self.previews_paused else self.tiles.items()):
                 observation = packet['observations'].get(serial)
                 if observation is not None:
                     tile.detail = f"{len(observation['ids'])}/{self.board.num_points} · {packet['coverage']['views'][serial]} poses"
@@ -1460,11 +1495,11 @@ class LiveWindow(QtWidgets.QMainWindow):
                         item.setBackground(QtGui.QColor(25, min(120, 45+int(count)*4), 90))
                     self.overlaps.setItem(row, col, item)
             self.last_packet = packet
-        if packet:
+        if packet and not self.previews_paused:
             age = time.monotonic() - packet['analyzed_at']
             self.inspection_title.setText(f'INSPECT · {self.selected} · {age:.1f}s')
         if self.pause_button.isChecked():
-            self.guidance.setText('PAUSED — previews and detection continue. Resume when ready; an in-progress save may finish.')
+            self.guidance.setText('CAPTURE PAUSED · detection continues; an in-progress save may finish.')
         if switching:
             self.guidance.setText('Switching session…')
         if not running:

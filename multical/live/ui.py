@@ -332,14 +332,18 @@ class RigView(QtWidgets.QWidget):
             self.hit_points[serial] = at
             direction = poses[serial][:3, :3].T @ np.array([0, 0, span*.12])
             tip = project(pos+direction)
+            direction_color = QtGui.QColor(color)
+            direction_color.setAlphaF(.45)
+            p.setPen(QtGui.QPen(direction_color, 1))
             p.drawLine(at, tip)
             delta = tip-at
             length = math.hypot(delta.x(), delta.y())
             if length > 7:
                 unit = delta / length
                 side = QtCore.QPointF(-unit.y(), unit.x())
-                p.drawLine(tip, tip-unit*5+side*3)
-                p.drawLine(tip, tip-unit*5-side*3)
+                p.drawLine(tip, tip-unit*4+side*2)
+                p.drawLine(tip, tip-unit*4-side*2)
+            p.setPen(QtGui.QPen(QtGui.QColor(color), 2))
             p.setBrush(QtGui.QColor(color))
             p.drawEllipse(at, 4, 4)
             p.drawText(at+QtCore.QPointF(6, -6), serial[-4:])

@@ -67,6 +67,7 @@ def validate(board, records, serials, cameras, camera_poses):
     errors = {s: [] for s in serials}
     expected = {s: 0 for s in serials}
     failures = {s: 0 for s in serials}
+    evaluated_views = {s: 0 for s in serials}
     for record in records:
         candidates = {}
         for index, serial in enumerate(serials):
@@ -99,7 +100,8 @@ def validate(board, records, serials, cameras, camera_poses):
                 continue
             predicted = cameras[index].project(points)
             errors[serial].extend(np.linalg.norm(predicted - np.asarray(det['corners']), axis=1))
-    return {s: dict(**stats(errors[s]), expected_points=expected[s], failed_points=failures[s]) for s in serials}
+            evaluated_views[serial] += 1
+    return {s: dict(**stats(errors[s]), expected_points=expected[s], failed_points=failures[s], evaluated_views=evaluated_views[s]) for s in serials}
 
 
 def solve_snapshot(board_file, serials, records, progress=lambda message: None, max_iterations=100, seed=None):

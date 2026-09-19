@@ -218,6 +218,20 @@ class InspectionView(QtWidgets.QWidget):
                 p.drawLine(predicted+QtCore.QPointF(0, -3), predicted+QtCore.QPointF(0, 3))
 
 
+def validation_quality(metric, views=0):
+    """Diagnostic pixel-error bands, not physical-accuracy acceptance gates."""
+    if metric and metric.get('n', 0) and metric.get('rms') is not None:
+        rms = metric['rms']
+        if rms < 3:
+            return '#69bafa', 'Low error'
+        if rms < 8:
+            return '#ffb45f', 'Review'
+        return '#ee8d86', 'High error'
+    if metric and metric.get('failed_points', 0):
+        return '#ee8d86', 'No prediction'
+    return ('#b5a1d6', 'Pending') if views else ('#888888', 'No evidence')
+
+
 class RigView(QtWidgets.QWidget):
     """Dependency-free orbitable projection of calibrated camera centres and poses."""
     camera_selected = QtCore.Signal(str)
@@ -250,17 +264,13 @@ class RigView(QtWidgets.QWidget):
         views = self.validation_views.get(serial, 0)
         metric = (self.result or {}).get('validation', {}).get(serial, {})
         n, failed = metric.get('n', 0), metric.get('failed_points', 0)
-        if n:
-            color, status = '#69bafa', 'Evaluated (not an accuracy pass)'
-        elif failed:
-            color, status = '#ee8d86', 'Could not independently evaluate'
-        elif views:
-            color, status = '#ffb45f', 'Captured; awaiting evaluation'
-        else:
-            color, status = '#888888', 'No validation poses'
+        color, status = validation_quality(metric, views)
         detail = f'{serial} · {status}\n{views} varied validation poses in this session'
         if n:
-            detail += f"\nLast evaluation: {metric['rms']:.2f} px RMS · {n} corners · {failed} failed"
+            detail += f"\nRMS {metric['rms']:.2f} px · P95 {metric['p95']:.2f} px · max {metric['maximum']:.2f} px"
+            detail += f"\n{n}/{metric['expected_points']} corners checked · {failed} failed"
+            detail += f"\n{metric.get('evaluated_views', '—')} independently checked poses"
+            detail += '\nDiagnostic RMS bands: <3 px low, 3–8 review, ≥8 high. Not accuracy acceptance.'
             detail += '\nNew validation captures are evaluated automatically.'
         elif failed:
             detail += f'\n{failed} corners lacked an independent prediction'
@@ -389,7 +399,7 @@ class RigView(QtWidgets.QWidget):
         p.drawText(12, 20, f'World · {missing}/{len(poses)} no poses')
         p.drawText(12, 36, f'Grid {step:g} m · Y=0 reference')
         x, y = 12, self.height() - (28 if self.width() < 380 else 10)
-        for color, title in [('#888888', 'No poses'), ('#ffb45f', 'Pending'), ('#69bafa', 'Evaluated'), ('#ee8d86', 'Failed')]:
+        for color, title in [('#888888', 'No data'), ('#69bafa', '<3 px'), ('#ffb45f', '3–8'), ('#ee8d86', '≥8 / failed')]:
             p.setPen(QtGui.QColor(color))
             width = p.fontMetrics().horizontalAdvance('● ' + title) + 12
             if x + width > self.width():
@@ -688,9 +698,9 @@ class LiveWindow(QtWidgets.QMainWindow):
             self.solve_status.setText('Seed loaded · native images required. Capture validation to check it, or training to refine poses with fixed lenses.')
         lower.addWidget(self.rig)
         self.tabs = QtWidgets.QTabWidget()
-        self.metrics = QtWidgets.QTableWidget(0, 6)
-        self.metrics.setHorizontalHeaderLabels(['Camera', 'Varied poses', 'Coverage', 'Train px', 'Test px', 'Test n'])
-        self.metrics.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
+        self.metrics = QtWidgets.QTableWidget(0, 10)
+        self.metrics.setHorizontalHeaderLabels(['Camera', 'Train poses', 'Coverage', 'Train px', 'RMS px', 'P95 px', 'Checked', 'Val poses', 'Evidence', 'Error'])
+        self.metrics.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
         self.metrics.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.metrics.setAlternatingRowColors(True)
         self.metrics.verticalHeader().hide()
@@ -698,7 +708,16 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.metrics.setToolTip('Click a row to inspect that camera. Pose counts and coverage describe capture diversity, not accuracy.')
         self.overlaps = QtWidgets.QTableWidget()
         self.overlaps.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
-        self.tabs.addTab(self.metrics, 'Coverage & residuals')
+        metrics_panel = QtWidgets.QWidget()
+        metrics_layout = QtWidgets.QVBoxLayout(metrics_panel)
+        metrics_layout.setContentsMargins(4, 4, 4, 0)
+        self.validation_summary = label('Validation: waiting for evaluation', 'muted')
+        self.validation_summary.setToolTip('RMS bands are diagnostic: <3 px low, 3–8 px review, ≥8 px high. '
+            'Pixel errors do not certify metric accuracy. Checked poses count independent predictions; '
+            'varied poses describe collected coverage. Failures remain in the denominator.')
+        metrics_layout.addWidget(self.validation_summary)
+        metrics_layout.addWidget(self.metrics)
+        self.tabs.addTab(metrics_panel, 'Coverage & residuals')
         self.tabs.addTab(self.overlaps, 'Shared pose counts')
         lower.addWidget(self.tabs)
         lower.setSizes([500, 700])
@@ -1131,7 +1150,9 @@ class LiveWindow(QtWidgets.QMainWindow):
             return
         ids = tuple(r['id'] for r in records if r['role'] == 'validation')
         key = (str(session.directory), geometry_key(self.result), ids)
-        if not ids or key == self.evaluated_key or key == self.auto_validation_attempt:
+        current_metrics = self.result.get('validation', {})
+        if (not ids or (key == self.evaluated_key and all('evaluated_views' in m for m in current_metrics.values()))
+                or key == self.auto_validation_attempt):
             return
         self.auto_validation_attempt = key
         self.solve(evaluate_only=True)
@@ -1356,12 +1377,33 @@ class LiveWindow(QtWidgets.QMainWindow):
                 fraction = np.count_nonzero(coverage['cells'][serial]) / (GRID[0]*GRID[1])
                 train = self.result.get('training', {}).get(serial, {}).get('rms') if self.result else None
                 test = self.result.get('validation', {}).get(serial) if self.result else None
+                color, quality = validation_quality(test, packet.get('validation_views', {}).get(serial, 0))
+                failed = (test or {}).get('failed_points', 0)
+                checked_poses = (test or {}).get('evaluated_views')
+                evidence = '—' if checked_poses is None else f'{checked_poses} checked poses'
+                if failed:
+                    evidence += f' · {failed} failed corners'
                 values = [serial, str(coverage['views'][serial]), f'{fraction:.0%}',
-                          '—' if train is None else f'{train:.3f}',
-                          '—' if test is None or test['rms'] is None else f"{test['rms']:.3f}",
-                          '—' if test is None else f"{test['n']}/{test['expected_points']}"]
+                          '—' if train is None else f'{train:.2f}',
+                          '—' if not test or test['rms'] is None else f"{test['rms']:.2f}",
+                          '—' if not test or test['p95'] is None else f"{test['p95']:.2f}",
+                          '—' if test is None else f"{test['n']}/{test['expected_points']}",
+                          str(packet.get('validation_views', {}).get(serial, 0)), evidence, quality]
                 for col, text in enumerate(values):
-                    self.metrics.setItem(row, col, QtWidgets.QTableWidgetItem(text))
+                    item = QtWidgets.QTableWidgetItem(text)
+                    item.setToolTip(self.rig.camera_status(serial)[1])
+                    if col in (4, 5, 9):
+                        item.setForeground(QtGui.QColor(color))
+                    self.metrics.setItem(row, col, item)
+            evaluated = (self.result or {}).get('validation', {})
+            checked = [m for m in evaluated.values() if m.get('n', 0)]
+            n = sum(m['n'] for m in checked)
+            rms = math.sqrt(sum(m['n'] * m['rms']**2 for m in checked) / n) if n else None
+            failures = sum(m.get('failed_points', 0) for m in evaluated.values())
+            review = sum(m['rms'] >= 3 for m in checked)
+            error_text = '—' if rms is None else f'{rms:.2f}'
+            self.validation_summary.setText(f'{len(checked)}/{len(serials)} checked · RMS {error_text} px · '
+                f'{review} review · {failures} failed corners')
             self.overlaps.setRowCount(len(serials))
             self.overlaps.setColumnCount(len(serials))
             self.overlaps.setHorizontalHeaderLabels(serials)

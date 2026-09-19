@@ -218,16 +218,29 @@ class PySpinSource:
         if self.camera_list.GetSize() == 0:
             raise RuntimeError('No cameras discovered. Check GigE interfaces and camera power.')
         discovered = {}
+        self.mac_to_serial = {}
         for i in range(self.camera_list.GetSize()):
             cam = self.camera_list[i]
             serial = self._get(cam.GetTLDeviceNodeMap(), 'DeviceSerialNumber', 'String')
             discovered[serial] = i
+            try:
+                address = self._get(cam.GetTLDeviceNodeMap(), 'GevDeviceMACAddress', 'Integer')
+                value = f'{address:012x}'
+                mac = ':'.join(value[j:j+2] for j in range(0, 12, 2))
+            except RuntimeError:
+                # Discovery still works for transports without MAC metadata;
+                # Captury import requires verified identity separately.
+                continue
+            if mac in self.mac_to_serial:
+                raise RuntimeError('Duplicate camera MAC address')
+            self.mac_to_serial[mac] = serial
         del cam  # SDK references must not survive cleanup.
         serials = self.expected_serials or tuple(sorted(discovered))
         missing = set(serials) - set(discovered)
         if missing or len(serials) != self.expected_count or len(set(serials)) != len(serials):
             raise RuntimeError(f"Expected {self.expected_count} distinct cameras; discovered {len(discovered)}, selected {len(set(serials) & set(discovered))}. Missing: {sorted(missing)}")
         self.serials = tuple(serials)
+        self.mac_to_serial = {mac: s for mac, s in self.mac_to_serial.items() if s in serials}
         # Discovery is expensive. Retain populated interfaces for action commands
         # instead of rediscovering every network segment on every video frame.
         for i in range(self.interfaces.GetSize()):

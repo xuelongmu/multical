@@ -62,6 +62,33 @@ def load_seed(path, units=None):
     return data
 
 
+def load_captury_seed(path, image_size, mac_to_serial=None, frame=None):
+    """Import native Captury data; reconcile identity only through verified MACs."""
+    data = read_captury(path, image_size, frame)
+    if mac_to_serial is not None:
+        mapping = {mac.lower(): str(serial) for mac, serial in mac_to_serial.items()}
+        renamed = {}
+        for original, meta in data['provenance']['cameras'].items():
+            mac = meta['name'].lower()
+            if mac not in mapping:
+                raise ValueError(f'Captury camera {original}: MAC {mac} is not in the connected roster')
+            renamed[original] = mapping[mac]
+        if len(set(renamed.values())) != len(renamed):
+            raise ValueError('Captury MAC mapping assigns multiple cameras to one serial')
+        for key in ('cameras', 'camera_poses'):
+            data[key] = {renamed[s]: value for s, value in data[key].items()}
+        data['provenance']['cameras'] = {
+            renamed[s]: dict(meta, captury_serial=s) for s, meta in data['provenance']['cameras'].items()}
+        data['provenance']['identity_mapping'] = 'verified_mac_to_device_serial'
+    # Reuse the existing stock-multical parser and full seed validation.
+    with tempfile.TemporaryDirectory(prefix='multical-captury-') as directory:
+        converted = Path(directory) / 'seed.json'
+        converted.write_text(json.dumps(data, allow_nan=False))
+        seed = load_seed(converted)
+    seed['bootstrap_source'] = dict(path=str(Path(path).resolve()), sha256=data['provenance']['sha256'])
+    return seed
+
+
 def validate_seed_geometry(seed, serials, sizes):
     if set(serials) != set(seed['cameras']):
         missing = sorted(set(serials) - set(seed['cameras']))

@@ -10,7 +10,7 @@ from scipy.spatial.transform import Rotation
 
 from multical.io.captury import read_captury
 from multical.io.import_calib import load_calibration
-from multical.io.interop import export_colmap, load_seed, pinhole_model, rectification_maps, validate_seed_geometry
+from multical.io.interop import export_colmap, load_seed, load_captury_seed, pinhole_model, rectification_maps, validate_seed_geometry
 
 
 def captury_text():
@@ -49,6 +49,23 @@ class InteropTests(unittest.TestCase):
         self.json = self.root / 'seed.json'
         self.json.write_text(json.dumps(self.data))
         self.seed = load_seed(self.json)
+
+    def test_direct_captury_import_maps_verified_mac_and_preserves_projection(self):
+        self.source.write_text(self.text.replace('mac-address', '2C:DD:A3:00:00:01'))
+        imported = load_captury_seed(self.source, (640, 480), {'2c:dd:a3:00:00:01': 'REAL7'})
+        self.assertEqual(set(imported['cameras']), {'REAL7'})
+        np.testing.assert_allclose(imported['camera_poses']['REAL7'], self.seed['camera_poses']['SERIAL7'])
+        np.testing.assert_allclose(imported['cameras']['REAL7']['K'], self.seed['cameras']['SERIAL7']['K'])
+        self.assertEqual(imported['provenance']['cameras']['REAL7']['captury_serial'], 'SERIAL7')
+        self.assertEqual(imported['bootstrap_source']['path'], str(self.source.resolve()))
+        self.assertEqual(imported['frame_poses'], {})
+        with self.assertRaisesRegex(ValueError, 'not in the connected roster'):
+            load_captury_seed(self.source, (640, 480), {'2c:dd:a3:00:00:02': 'REAL7'})
+
+    def test_direct_captury_import_rejects_duplicate_physical_identity(self):
+        self.source.write_text(self.text + self.text[self.text.index('camera 7'):].replace('camera 7', 'camera 8', 1).replace('SERIAL7', 'SERIAL8'))
+        with self.assertRaisesRegex(ValueError, 'multiple cameras'):
+            load_captury_seed(self.source, (640, 480), {'mac-address': 'REAL7'})
 
     def test_native_projection_units_axes_and_stock_multical_reader_agree(self):
         loaded = load_calibration(self.json)

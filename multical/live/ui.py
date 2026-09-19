@@ -10,7 +10,7 @@ import numpy as np
 from qtpy import QtCore, QtGui, QtWidgets
 
 from multical.board import load_config
-from multical.io.interop import load_seed, validate_seed_geometry
+from multical.io.interop import load_seed, load_captury_seed, validate_seed_geometry
 from .calibration import solve_process
 from .engine import LiveEngine
 from .guidance import capture_progress, inspection_advice, inspection_group
@@ -345,6 +345,7 @@ class LiveWindow(QtWidgets.QMainWindow):
         controls.addWidget(self.board_button)
         self.seed_button = QtWidgets.QPushButton('Load calibration…')
         self.seed_button.clicked.connect(self.choose_seed)
+        self.seed_button.setToolTip('Import Captury .calib or load Multical JSON. Captury import uses the connected cameras to verify identities and image sizes.')
         controls.addWidget(self.seed_button)
         self.start_button = QtWidgets.QPushButton('Connect cameras')
         self.start_button.setObjectName('primary')
@@ -654,10 +655,31 @@ class LiveWindow(QtWidgets.QMainWindow):
             self.fail(f'Cannot save calibration: {exc}')
 
     def choose_seed(self):
-        filename, _ = QtWidgets.QFileDialog.getOpenFileName(self, 'Load calibration into a new session (metres, native images)', '', 'JSON (*.json)')
+        filename, _ = QtWidgets.QFileDialog.getOpenFileName(self, 'Load calibration into a new session', '', 'Calibrations (*.json *.calib);;Captury (*.calib);;Multical (*.json)')
         if filename:
             try:
-                seed = load_seed(filename)
+                if Path(filename).suffix.lower() == '.calib':
+                    batch = self.engine.snapshot()['batch'] if self.engine else None
+                    if batch is None or len(batch.frames) != len(batch.serials):
+                        raise ValueError('Connect all cameras before importing Captury so image size and MAC identities can be verified.')
+                    sizes = {tuple(f.image.shape[1::-1]) for f in batch.frames.values()}
+                    if len(sizes) != 1:
+                        raise ValueError('Captury import currently requires matching native image sizes across cameras.')
+                    identities = getattr(self.engine.source, 'mac_to_serial', {})
+                    if len(identities) != len(batch.serials):
+                        raise ValueError('Connected cameras do not expose a complete MAC identity map; cannot safely match Captury cameras.')
+                    try:
+                        seed = load_captury_seed(filename, next(iter(sizes)), identities)
+                    except ValueError as exc:
+                        if 'select --frame explicitly' not in str(exc):
+                            raise
+                        frame, accepted = QtWidgets.QInputDialog.getInt(self, 'Animated calibration', 'Frame number to import:', 0, 0, 2147483647)
+                        if not accepted:
+                            return
+                        seed = load_captury_seed(filename, next(iter(sizes)), identities, frame)
+                    validate_seed_geometry(seed, batch.serials, {s: f.metadata()['image_size'] for s, f in batch.frames.items()})
+                else:
+                    seed = load_seed(filename)
                 serials = list(seed['cameras'])
                 def configure():
                     self.args.resume = None

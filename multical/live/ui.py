@@ -158,27 +158,15 @@ class InspectionView(QtWidgets.QWidget):
         self.update()
 
     def mousePressEvent(self, event):
-        self.drag = self.press_pos = event.pos()
+        self.drag = event.pos()
 
     def mouseMoveEvent(self, event):
-        if self.drag is None:
-            serial = next((s for s, point in self.hit_points.items()
-                           if (point - QtCore.QPointF(event.pos())).manhattanLength() < 14), None)
-            if serial:
-                QtWidgets.QToolTip.showText(event.globalPos(), self.camera_status(serial)[1], self)
-            else:
-                QtWidgets.QToolTip.hideText()
         if self.drag is not None:
             self.pan += QtCore.QPointF(event.pos() - self.drag)
             self.drag = event.pos()
             self.update()
 
     def mouseReleaseEvent(self, event):
-        if self.drag is not None and (event.pos() - self.press_pos).manhattanLength() < 4:
-            serial = next((s for s, point in self.hit_points.items()
-                           if (point - QtCore.QPointF(event.pos())).manhattanLength() < 14), None)
-            if serial:
-                self.camera_selected.emit(serial)
         self.drag = None
 
     def mouseDoubleClickEvent(self, event):
@@ -278,9 +266,16 @@ class RigView(QtWidgets.QWidget):
         return color, detail
 
     def mousePressEvent(self, event):
-        self.drag = event.pos()
+        self.drag = self.press_pos = event.pos()
 
     def mouseMoveEvent(self, event):
+        if self.drag is None:
+            serial = next((s for s, point in self.hit_points.items()
+                           if (point - QtCore.QPointF(event.pos())).manhattanLength() < 14), None)
+            if serial:
+                QtWidgets.QToolTip.showText(event.globalPos(), self.camera_status(serial)[1], self)
+            else:
+                QtWidgets.QToolTip.hideText()
         if self.drag is not None:
             delta = event.pos() - self.drag
             self.yaw += delta.x() * .008
@@ -289,6 +284,11 @@ class RigView(QtWidgets.QWidget):
             self.update()
 
     def mouseReleaseEvent(self, event):
+        if self.drag is not None and (event.pos() - self.press_pos).manhattanLength() < 4:
+            serial = next((s for s, point in self.hit_points.items()
+                           if (point - QtCore.QPointF(event.pos())).manhattanLength() < 14), None)
+            if serial:
+                self.camera_selected.emit(serial)
         self.drag = None
 
     def wheelEvent(self, event):
@@ -316,7 +316,7 @@ class RigView(QtWidgets.QWidget):
                     max(self.height()-100, 40) / projected_extent[1]) * .85 * self.zoom
         def project(point):
             transformed = rotation @ (point-centre)
-            return QtCore.QPointF(self.width()/2 + transformed[0]*scale, self.height()/2 + transformed[1]*scale)
+            return QtCore.QPointF(self.width()/2 + transformed[0]*scale, self.height()/2 - transformed[1]*scale)
         p.setPen(QtGui.QPen(QtGui.QColor('#3b3b3b'), 1))
         for a in np.linspace(-span, span, 9):
             p.drawLine(project(np.array([a, 0, -span])+centre), project(np.array([a, 0, span])+centre))

@@ -260,6 +260,7 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.quad_serials = []
         self.tiles = {}
         self.closing = False
+        self.pending_session_action = None
         self.setWindowTitle('Multical Live — capture, inspect, calibrate')
         self.resize(1550, 1000)
         self.setStyleSheet(STYLE)
@@ -317,7 +318,7 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.board_button = QtWidgets.QPushButton('Choose board…')
         self.board_button.clicked.connect(self.choose_board)
         controls.addWidget(self.board_button)
-        self.seed_button = QtWidgets.QPushButton('Load calibration seed…')
+        self.seed_button = QtWidgets.QPushButton('Load calibration…')
         self.seed_button.clicked.connect(self.choose_seed)
         controls.addWidget(self.seed_button)
         self.start_button = QtWidgets.QPushButton('Connect cameras')
@@ -360,6 +361,20 @@ class LiveWindow(QtWidgets.QMainWindow):
         controls.addWidget(self.session_label)
         body.addWidget(sidebar)
         main = QtWidgets.QVBoxLayout()
+        session_controls = QtWidgets.QHBoxLayout()
+        self.pause_button = QtWidgets.QPushButton('Pause capture')
+        self.pause_button.setCheckable(True)
+        self.pause_button.setToolTip('Pause training and validation capture; previews and detection continue. An in-progress disk save may finish.')
+        self.pause_button.toggled.connect(self.pause_capture)
+        self.new_button = QtWidgets.QPushButton('New calibration')
+        self.new_button.clicked.connect(self.new_session)
+        self.load_session_button = QtWidgets.QPushButton('Open saved session…')
+        self.load_session_button.clicked.connect(self.open_session)
+        self.save_button = QtWidgets.QPushButton('Save calibration as…')
+        self.save_button.clicked.connect(self.save_calibration)
+        for button in (self.pause_button, self.new_button, self.load_session_button, self.save_button):
+            session_controls.addWidget(button)
+        main.addLayout(session_controls)
         self.guidance = label('Connect cameras to begin. Use the simulated rig to exercise the full workflow.', 'guidance')
         main.addWidget(self.guidance)
         progress_row = QtWidgets.QHBoxLayout()
@@ -505,15 +520,90 @@ class LiveWindow(QtWidgets.QMainWindow):
             except Exception as exc:
                 self.fail(str(exc))
 
+    def pause_capture(self, paused):
+        if self.engine:
+            self.engine.set_paused(paused)
+        self.pause_button.setText('Resume capture' if paused else 'Pause capture')
+
+    def switch_session(self, configure):
+        self.cancel_solve()
+        self.pending_session_action = configure
+        if self.engine and self.engine.running():
+            self.engine.set_paused(True)
+            self.engine.stop()
+            self.guidance.setText('Switching sessions: restoring camera settings. Saved captures are retained.')
+        # refresh invokes configure only after the old engine releases the cameras.
+
+    def new_session(self):
+        def configure():
+            self.args.resume = None
+            self.seed = None
+        self.switch_session(configure)
+
+    def open_session(self):
+        directory = QtWidgets.QFileDialog.getExistingDirectory(self, 'Open saved capture session', self.args.output)
+        if not directory:
+            return
+        try:
+            path = Path(directory)
+            manifest = json.loads((path / 'manifest.json').read_text())
+            board = self._load_board(path / 'board.yaml')
+            serials = manifest['camera_serials']
+            if manifest.get('schema_version') != 1 or not serials or len(set(serials)) != len(serials):
+                raise ValueError('Unsupported or invalid session manifest')
+            seed = load_seed(path / 'bootstrap.json') if (path / 'bootstrap.json').exists() else None
+            # Validate session completeness before disconnecting the current rig.
+            from .session import Session
+            Session(self.args.output, path / 'board.yaml', serials,
+                    simulated=manifest['simulated'], capture_mode=manifest.get('capture_mode', 'stationary'), resume=path)
+            def configure():
+                self.args.resume = str(path)
+                self.seed = seed
+                self.board, self.board_file = board, str(path / 'board.yaml')
+                self.board_label.setText(f'board.yaml\n{board.num_points} corners · {board.square_length*1000:g} mm squares')
+                self.count.setValue(len(serials))
+                self.serials.setText(','.join(serials))
+                self.source_choice.setCurrentIndex(1 if manifest['simulated'] else 0)
+                self.capture_mode.setCurrentIndex(1 if manifest.get('capture_mode') == 'motion' else 0)
+            self.switch_session(configure)
+        except Exception as exc:
+            self.fail(f'Cannot open session: {exc}')
+
+    def save_calibration(self):
+        if self.result is None:
+            self.fail('No fitted or loaded calibration yet. Captures are already saved automatically.')
+            return
+        filename, _ = QtWidgets.QFileDialog.getSaveFileName(self, 'Save calibration', 'calibration.json', 'JSON (*.json)')
+        if not filename:
+            return
+        try:
+            import os
+            import tempfile
+            destination = Path(filename)
+            payload = json.dumps(self.result, indent=2, allow_nan=False)
+            with tempfile.NamedTemporaryFile(mode='w', dir=destination.parent, prefix='.calibration-', delete=False) as stream:
+                temporary = Path(stream.name)
+                stream.write(payload)
+            try:
+                os.replace(temporary, destination)
+            finally:
+                temporary.unlink(missing_ok=True)
+            self.solve_status.setText(f'Saved calibration to {destination}. Captures remain in the session folder.')
+        except Exception as exc:
+            self.fail(f'Cannot save calibration: {exc}')
+
     def choose_seed(self):
-        filename, _ = QtWidgets.QFileDialog.getOpenFileName(self, 'Calibration seed (metres, native images)', '', 'JSON (*.json)')
+        filename, _ = QtWidgets.QFileDialog.getOpenFileName(self, 'Load calibration into a new session (metres, native images)', '', 'JSON (*.json)')
         if filename:
             try:
                 seed = load_seed(filename)
-                self.seed = self.result = self.rig.result = seed
-                self.seed_checked = False
-                self.rig.update()
-                self.solve_status.setText('Seed loaded. Capture validation to check it, or training to refine camera poses. Lens parameters stay fixed.')
+                serials = list(seed['cameras'])
+                def configure():
+                    self.args.resume = None
+                    self.seed = seed
+                    self.count.setValue(len(serials))
+                    self.serials.setText(','.join(serials))
+                self.switch_session(configure)
             except Exception as exc:
                 self.fail(str(exc))
 
@@ -561,6 +651,7 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.engine = LiveEngine(source, self.board, self.board_file, self.args.output, self.args.workers,
                                  capture_mode=capture_mode, resume=getattr(self.args, 'resume', None))
         self.engine.auto_capture = self.auto.isChecked()
+        self.engine.set_paused(self.pause_button.isChecked())
         self.engine.start()
         self.mode_badge.setText('SIMULATION · generated images' if demo else 'LIVE · direct PySpin')
 
@@ -797,11 +888,29 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.poll_solve()
         running = self.engine is not None and self.engine.running()
         ready = running and self.engine.session is not None and not self.engine.stop_event.is_set()
+        if self.pending_session_action is not None and not running and not self.closing:
+            configure, self.pending_session_action = self.pending_session_action, None
+            try:
+                configure()
+                self.pause_button.setChecked(False)
+                self.count_label.setText('0 training · 0 validation')
+                self.solve_status.setText('Collect varied poses, or validation poses to check a loaded calibration.')
+                self.toggle_capture()
+            except Exception as exc:
+                self.fail(f'Cannot switch session: {exc}')
+            return
+        switching = self.pending_session_action is not None
+        self.start_button.setEnabled(not switching)
+        self.new_button.setEnabled(not switching and self.process is None)
+        self.load_session_button.setEnabled(not switching and self.process is None)
+        self.seed_button.setEnabled(not switching and self.process is None)
+        self.pause_button.setEnabled(ready and not switching)
+        self.save_button.setEnabled(self.result is not None and self.process is None and not switching)
         self.start_button.setText('Disconnect cameras' if running else 'Connect cameras')
-        for item in (self.source_choice, self.capture_mode, self.count, self.serials, self.board_button, self.seed_button, self.exposure, self.gain):
+        for item in (self.source_choice, self.capture_mode, self.count, self.serials, self.board_button, self.exposure, self.gain):
             item.setEnabled(not running and self.process is None)
-        self.training_button.setEnabled(ready)
-        self.validation_button.setEnabled(ready)
+        self.training_button.setEnabled(ready and not self.pause_button.isChecked() and not switching)
+        self.validation_button.setEnabled(ready and not self.pause_button.isChecked() and not switching)
         self.solve_button.setEnabled(self.process is None and self.engine is not None and self.engine.session is not None)
         if self.closing and not running:
             self.close()
@@ -871,7 +980,7 @@ class LiveWindow(QtWidgets.QMainWindow):
             self.update_focus(packet)
             self.update_inspection(packet)
             pending_text = f"{state['pending'].capitalize()} queued: " if state['pending'] else ''
-            self.guidance.setText(pending_text + packet['guidance'])
+            self.guidance.setText(('PAUSED — previews continue; captures stay saved. ' if state['paused'] else pending_text) + packet['guidance'])
             progress = capture_progress(packet['coverage'], packet.get('validation_views', {}), self.seed is not None)
             self.progress_label.setText(
                 f"{progress['ready']}/{progress['total']} cameras have {progress['minimum']} varied training views · "
@@ -917,6 +1026,10 @@ class LiveWindow(QtWidgets.QMainWindow):
         if packet:
             age = time.monotonic() - packet['analyzed_at']
             self.inspection_title.setText(f'BOARD INSPECTION · {self.selected} · analyzed {age:.1f}s ago')
+        if self.pause_button.isChecked():
+            self.guidance.setText('PAUSED — previews and detection continue. Resume capture when ready; an in-progress save may finish.')
+        if switching:
+            self.guidance.setText('Switching sessions: restoring camera settings. Saved captures are retained.')
         if not running:
             self.mode_badge.setText('DISCONNECTED · retained session')
 

@@ -272,6 +272,19 @@ class CoverageAndSessionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'already been retained'):
                 session.add(packet, 'training')
 
+    def test_pause_clears_queued_capture_and_blocks_manual_requests(self):
+        from multical.live.engine import LiveEngine
+        engine = LiveEngine(Mock(), self.board, BOARD, '/tmp/unused')
+        engine.capture('training')
+        engine.set_paused(True)
+        self.assertIsNone(engine.pending_capture)
+        self.assertTrue(engine.snapshot()['paused'])
+        with self.assertRaisesRegex(ValueError, 'paused'):
+            engine.capture('validation')
+        engine.set_paused(False)
+        engine.capture('validation')
+        self.assertEqual(engine.pending_capture, 'validation')
+
     def test_resume_restores_captures_coverage_and_sequence_without_overwrite(self):
         from multical.live.engine import LiveEngine
         packet = self.packet()

@@ -26,6 +26,7 @@ class LiveEngine:
         self.error = None
         self.pending_capture = None
         self.auto_capture = False
+        self.paused = False
         self.previous = None
         self.captured_sequence = -1
         self.threads = []
@@ -120,12 +121,12 @@ class LiveEngine:
                         stationary = bool(movements) and max(movements) < 1.0
                     with self.lock:
                         role = requested_role = self.pending_capture
-                        automatic = self.auto_capture
+                        automatic = self.auto_capture and not self.paused
                     if automatic and novelty and stationary:
                         role = role or 'training'
                     partition_conflict = (role == 'validation' and self.coverage.matches_pose(observations)) or \
                                          (role == 'training' and self.validation_coverage.matches_pose(observations))
-                    if role and usable and not problems and not partition_conflict and batch.sequence != self.captured_sequence:
+                    if role and not self.paused and usable and not problems and not partition_conflict and batch.sequence != self.captured_sequence:
                         record = self.session.add(packet, role)
                         if role == 'training':
                             self.coverage.add(observations)
@@ -151,8 +152,16 @@ class LiveEngine:
                         self.error = f'Detection/capture failed: {exc}'
                     self.stop_event.set()
 
+    def set_paused(self, paused):
+        with self.lock:
+            self.paused = bool(paused)
+            if paused:
+                self.pending_capture = None
+
     def capture(self, role):
         with self.lock:
+            if self.paused:
+                raise ValueError('Capture is paused; resume before saving a pose')
             if self.pending_capture:
                 raise ValueError('A capture is already waiting for a complete usable frame set')
             self.pending_capture = role
@@ -160,7 +169,7 @@ class LiveEngine:
     def snapshot(self):
         with self.lock:
             return dict(batch=self.latest_batch, packet=self.packet, status=self.status,
-                        error=self.error, pending=self.pending_capture,
+                        error=self.error, pending=self.pending_capture, paused=self.paused,
                         session=self.session)
 
     def stop(self):

@@ -79,3 +79,13 @@ The unit/integration suite covers dropped and stale frames, exposure midpoint mi
 CaptureNet-derived behavior is attributed in `multical/live/sources.py` to `/home/zerospace/capturenet/scripts/fire3.py`: scheduled Action0 keys, multi-interface broadcasts, PTP checks, and the end-of-exposure timestamp convention. No CaptureNet script is executed by this application.
 
 Auto-capture has no fixed cooldown: each newly useful, steady observation is eligible as soon as detection finishes. Capture validity, duplicate-pose checks and training/validation separation still apply. Image saving remains synchronous with analysis, so actual capture throughput depends on acquisition, detection and disk writes. Validation remains manual.
+
+Session controls are above the camera wall:
+
+- **Pause capture / Resume capture** stops both automatic and manual training/validation retention while acquisition and detection continue. Queued capture requests are cancelled; a disk save already underway may finish. Calibration can still run while capture is paused.
+- **Save calibration as…** exports the currently fitted or loaded calibration JSON. It is enabled only when a calibration exists. Completed solves are also saved automatically inside the session; captured images and metadata are always saved incrementally.
+- **New calibration** starts a fresh collection with the current board and camera settings and no calibration seed. The prior session remains on disk.
+- **Open saved session…** selects a session directory and restores its board, camera roster, source type, capture mode, captures and coverage. A saved bootstrap calibration is restored when present. This resumes collection, not a previous fitted-result display.
+- **Load calibration…** accepts a live/multical/converted-Captury calibration JSON and starts a fresh session using it as a seed. It preserves the previous session and checks camera identity and image geometry before using the seed. Use Open saved session to recover captured poses instead.
+
+New/open/load wait for acquisition to stop and camera settings to restore before reconnecting. The current auto-capture preference is retained; the new/resumed collection is unpaused. Pausing is the immediate way to take a break without disconnecting the cameras.

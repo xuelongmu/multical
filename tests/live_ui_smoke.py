@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import tempfile
 import time
+from unittest.mock import patch
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -31,7 +32,7 @@ def main():
     state = dict(phase='training', solve_frame=None, errors=[])
     def tick():
         try:
-            if time.monotonic() - start > 100:
+            if time.monotonic() - start > 130:
                 raise AssertionError('UI workflow timed out')
             engine = window.engine
             if engine is None or engine.session is None:
@@ -64,8 +65,39 @@ def main():
                     assert len(window.result['validation_ids']) == 4
                     window.grab().save('/tmp/multical-live-calibrated.png')
                     print(f'UI PASS: saved calibrated screenshot and session in {output}', flush=True)
-                    timer.stop()
-                    window.close()
+                    state['original_session'] = engine.session.directory
+                    state['original_count'] = len(records)
+                    state['saved_calibration'] = str(Path(output) / 'export.json')
+                    with patch.object(QtWidgets.QFileDialog, 'getSaveFileName', return_value=(state['saved_calibration'], 'JSON')):
+                        window.save_calibration()
+                    assert Path(state['saved_calibration']).is_file()
+                    window.auto.setChecked(True)
+                    window.pause_button.setChecked(True)
+                    state['pause_frame'] = engine.latest_batch.sequence
+                    state['paused_at'] = time.monotonic()
+                    state['phase'] = 'paused'
+            if state['phase'] == 'paused' and time.monotonic() - state['paused_at'] > 1.5:
+                assert len(engine.session.samples) == state['original_count'], 'Pause saved an unexpected capture'
+                assert engine.latest_batch.sequence > state['pause_frame'], 'Pause stopped preview'
+                window.auto.setChecked(False)
+                window.new_session()
+                state['phase'] = 'new_session'
+            if state['phase'] == 'new_session' and engine.session and engine.session.directory != state['original_session']:
+                assert len(engine.session.samples) == 0
+                with patch.object(QtWidgets.QFileDialog, 'getExistingDirectory', return_value=str(state['original_session'])):
+                    window.open_session()
+                state['phase'] = 'resume_session'
+            if state['phase'] == 'resume_session' and engine.session and engine.session.directory == state['original_session'] and engine.running():
+                assert len(engine.session.samples) == state['original_count']
+                assert any(engine.coverage.views.values())
+                with patch.object(QtWidgets.QFileDialog, 'getOpenFileName', return_value=(state['saved_calibration'], 'JSON')):
+                    window.choose_seed()
+                state['phase'] = 'loaded_calibration'
+            if state['phase'] == 'loaded_calibration' and window.seed_checked and engine.session and engine.session.directory != state['original_session']:
+                assert window.seed is not None and window.result is not None
+                print('UI PASS: pause preserved previews; saved calibration; new session; resumed coverage; loaded calibration', flush=True)
+                timer.stop()
+                window.close()
         except Exception as exc:
             state['errors'].append(str(exc))
             print('UI FAIL:', exc, flush=True)

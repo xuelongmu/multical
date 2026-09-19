@@ -73,6 +73,27 @@ def capture_icon(paused):
     return QtGui.QIcon(pixels)
 
 
+def sound_icon(enabled):
+    pixels = QtGui.QPixmap(24, 20)
+    pixels.fill(QtCore.Qt.transparent)
+    painter = QtGui.QPainter(pixels)
+    painter.setRenderHint(QtGui.QPainter.Antialiasing)
+    painter.setPen(QtCore.Qt.NoPen)
+    painter.setBrush(QtGui.QColor('#eeeeee'))
+    painter.drawPolygon(QtGui.QPolygon([QtCore.QPoint(x, y) for x, y in
+        [(2, 7), (6, 7), (11, 3), (11, 17), (6, 13), (2, 13)]]))
+    painter.setBrush(QtCore.Qt.NoBrush)
+    painter.setPen(QtGui.QPen(QtGui.QColor('#eeeeee'), 1.6))
+    if enabled:
+        painter.drawArc(10, 5, 9, 10, -60 * 16, 120 * 16)
+        painter.drawArc(9, 1, 14, 18, -60 * 16, 120 * 16)
+    else:
+        painter.drawLine(15, 7, 21, 13)
+        painter.drawLine(15, 13, 21, 7)
+    painter.end()
+    return QtGui.QIcon(pixels)
+
+
 def as_image(pixels, width=900):
     h, w = pixels.shape[:2]
     if w > width:
@@ -375,27 +396,24 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.auto.toggled.connect(self.set_auto)
         auto_options = QtWidgets.QHBoxLayout()
         auto_options.addWidget(self.auto)
-        self.sounds = QtWidgets.QCheckBox('Sounds')
+        auto_options.addStretch()
+        self.sounds = QtWidgets.QToolButton()
+        self.sounds.setCheckable(True)
+        self.sounds.setIconSize(QtCore.QSize(24, 20))
         self.sounds.setChecked(self.preferences.value('sounds/enabled', True, type=bool))
-        self.sounds.setToolTip('Training: single tone. Validation: two rising tones. Groups joined: rising chime. Capture blocked: low falling tones. Guidance: hold still, change tilt, one camera only. Hover the speaker menu to preview cues.')
         self.sounds.toggled.connect(self.set_sounds)
-        auto_options.addWidget(self.sounds)
-        sound_test = QtWidgets.QToolButton()
-        sound_test.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_MediaVolume))
-        sound_test.setToolTip('Preview sound cues')
-        sound_test.setAccessibleName('Test capture sounds')
-        sound_menu = QtWidgets.QMenu(sound_test)
+        self.set_sounds(self.sounds.isChecked())
+        sound_menu = QtWidgets.QMenu(self.sounds)
         for cue, title in [('training', 'Training saved'), ('validation', 'Validation saved'),
                            ('attention', 'Attention: capture blocked'), ('milestone', 'Milestone: groups joined'),
                            ('hold', 'Hold still'), ('tilt', 'Change tilt or position'), ('single', 'Only one camera sees board')]:
             action = sound_menu.addAction(title)
             action.triggered.connect(lambda checked=False, role=cue: self.preview_sound(role))
-        sound_test.setMenu(sound_menu)
-        sound_test.setPopupMode(QtWidgets.QToolButton.InstantPopup)
-        auto_options.addWidget(sound_test)
+        self.sounds.setMenu(sound_menu)
+        self.sounds.setPopupMode(QtWidgets.QToolButton.MenuButtonPopup)
+        auto_options.addWidget(self.sounds)
         if self.capture_sounds.error:
             self.sounds.setEnabled(False)
-            sound_test.setEnabled(False)
             self.sounds.setToolTip('Audio unavailable: ' + self.capture_sounds.error)
         controls.addLayout(auto_options)
         self.auto_role = QtWidgets.QComboBox()
@@ -780,19 +798,17 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.mode_badge.setText('SIMULATION · generated images' if demo else 'LIVE · direct PySpin')
 
     def set_sounds(self, enabled):
+        self.sounds.setIcon(sound_icon(enabled))
+        action = 'Mute sounds' if enabled else 'Unmute sounds'
+        self.sounds.setAccessibleName(action)
+        self.sounds.setToolTip(action + ' · arrow previews each cue (also while muted)')
         self.preferences.setValue('sounds/enabled', enabled)
         self.preferences.sync()
         if not enabled:
             self.capture_sounds.stop()
 
     def preview_sound(self, role):
-        if self.sounds.isChecked():
-            self.capture_sounds.play(role)
-
-    def test_sounds(self):
-        if self.sounds.isChecked():
-            for delay, cue in ((0, 'training'), (350, 'validation'), (900, 'attention'), (1500, 'milestone')):
-                QtCore.QTimer.singleShot(delay, lambda role=cue: self.capture_sounds.play(role) if self.sounds.isChecked() else None)
+        self.capture_sounds.play(role)
 
     def notify_capture(self, event):
         if event is None:

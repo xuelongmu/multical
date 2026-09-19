@@ -28,6 +28,7 @@ QLabel#muted { color: #aaaaaa; }
 QLabel#guidance { background: #232827; color: #d5e9e3; border: 1px solid #3b4a45; border-radius: 8px; padding: 9px; font-size: 14px; }
 QLabel#error { color: #ffb2a5; background: #3b2528; border-radius: 6px; padding: 10px; }
 QPushButton { background: #303030; border: 1px solid #454545; border-radius: 6px; padding: 6px 9px; }
+QPushButton:checked { border: 1px solid #52dfbc; background: #303a36; }
 QPushButton:hover { background: #3c3c3c; }
 QPushButton:disabled { color: #777777; background: #252525; border-color: #353535; }
 QPushButton#primary { background: #52dfbc; color: #0c2521; font-weight: 600; border: none; }
@@ -377,17 +378,30 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.load_session_button.clicked.connect(self.open_session)
         self.save_button = QtWidgets.QPushButton('Save calibration…')
         self.save_button.clicked.connect(self.save_calibration)
-        for button in (self.pause_button, self.new_button, self.load_session_button, self.save_button):
-            session_controls.addWidget(button)
         for button, icon in ((self.pause_button, QtWidgets.QStyle.SP_MediaPause),
-                             (self.new_button, QtWidgets.QStyle.SP_FileIcon),
                              (self.load_session_button, QtWidgets.QStyle.SP_DialogOpenButton),
                              (self.save_button, QtWidgets.QStyle.SP_DialogSaveButton)):
             button.setIcon(self.style().standardIcon(icon))
-        self.new_button.setToolTip('Start a new calibration session; preserve the current session on disk.')
-        self.load_session_button.setToolTip('Restore saved captures and coverage.')
-        self.save_button.setToolTip('Export camera parameters as JSON. Images remain in the session folder.')
-        main.addLayout(session_controls)
+        self.new_button.setToolTip('New calibration session — preserve the current session on disk.')
+        self.load_session_button.setToolTip('Open session — restore saved captures and coverage.')
+        self.save_button.setToolTip('Save calibration — export camera parameters as JSON. Images remain in the session folder.')
+        plus = QtGui.QPixmap(20, 20)
+        plus.fill(QtCore.Qt.transparent)
+        painter = QtGui.QPainter(plus)
+        painter.setPen(QtGui.QPen(QtGui.QColor('#eeeeee'), 2))
+        painter.drawLine(4, 10, 16, 10)
+        painter.drawLine(10, 4, 10, 16)
+        painter.end()
+        self.new_button.setIcon(QtGui.QIcon(plus))
+        for button in (self.new_button, self.load_session_button, self.save_button, self.pause_button):
+            button.setAccessibleName(button.text())
+            button.setText('')
+            button.setFixedSize(36, 32)
+            button.setIconSize(QtCore.QSize(20, 20))
+            if button is self.pause_button:
+                session_controls.addStretch()
+            session_controls.addWidget(button)
+        controls.insertLayout(0, session_controls)
         self.guidance = label('Connect cameras to begin.', 'guidance')
         main.addWidget(self.guidance)
         progress_row = QtWidgets.QHBoxLayout()
@@ -548,7 +562,8 @@ class LiveWindow(QtWidgets.QMainWindow):
     def pause_capture(self, paused):
         if self.engine:
             self.engine.set_paused(paused)
-        self.pause_button.setText('Resume' if paused else 'Pause')
+        self.pause_button.setAccessibleName('Resume capture' if paused else 'Pause capture')
+        self.pause_button.setToolTip('Resume capture' if paused else 'Pause capture — previews continue; an in-progress save may finish.')
         self.pause_button.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_MediaPlay if paused else QtWidgets.QStyle.SP_MediaPause))
 
     def switch_session(self, configure):

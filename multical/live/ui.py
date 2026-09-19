@@ -279,7 +279,7 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.tiles = {}
         self.closing = False
         self.pending_session_action = None
-        self.setWindowTitle('Multical Live — capture, inspect, calibrate')
+        self.setWindowTitle('Multical Live')
         self.resize(1500, 920)
         self.setStyleSheet(STYLE)
         root = QtWidgets.QWidget()

@@ -49,7 +49,8 @@ class SourceTests(unittest.TestCase):
         with patch('multical.live.sources.time.monotonic', return_value=100.):
             bad = driver.read()
         self.assertEqual(len(bad.frames), 1)
-        self.assertTrue(any('Clock not ready' in error for error in bad.problems()))
+        self.assertTrue(any('Clock not ready' in error for error in bad.problems(capture_mode='motion')))
+        self.assertEqual(bad.problems(capture_mode='stationary'), [])
         with patch('multical.live.sources.time.monotonic', return_value=104.):
             good = driver.read()
         self.assertEqual(good.problems(), [])
@@ -90,7 +91,32 @@ class SourceTests(unittest.TestCase):
         batch.frames['B'].exposure_us += 1000
         batch.frames['B'].timestamp_ns += 1_000_000
         self.assertEqual(batch.spread_us, 6)
-        self.assertTrue(any('midpoints' in s for s in batch.problems()))
+        self.assertTrue(any('midpoints' in s for s in batch.problems(capture_mode='motion')))
+
+    def test_stationary_mode_allows_different_exposures_and_small_clock_offsets(self):
+        batch = self.batch()
+        batch.frames['B'].exposure_us += 1000
+        batch.frames['B'].timestamp_ns += 1_100_000  # Also 100 us of start skew, still a fresh frame.
+        batch.timing_warnings['ptp:B'] = 'B: clock offset 5000 ns'
+        self.assertEqual(batch.problems(capture_mode='stationary'), [])
+        self.assertEqual(len(batch.problems(capture_mode='motion')), 3)
+        self.assertEqual(len(batch.timing_issues()), 3)
+
+    def test_stationary_mode_keeps_missing_stale_and_transport_failures_blocking(self):
+        for fault in ('missing', 'stale', 'transport'):
+            batch = self.batch()
+            batch.timing_warnings['ptp:B'] = 'Clock quality warning'
+            if fault == 'missing':
+                del batch.frames['B']
+            elif fault == 'stale':
+                batch.frames['B'].timestamp_ns -= 200_000_000
+            else:
+                batch.errors['B'] = 'Transport failed'
+            self.assertTrue(batch.problems(capture_mode='stationary'), fault)
+
+    def test_unknown_capture_mode_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, 'Capture mode'):
+            self.batch().problems(capture_mode='typo')
 
     def test_collect_copies_image_and_always_releases_buffer(self):
         driver = PySpinSource()
@@ -245,6 +271,25 @@ class CoverageAndSessionTests(unittest.TestCase):
             self.assertNotIn('image', session.samples[0]['frames']['SIM-01'])
             with self.assertRaisesRegex(ValueError, 'already been retained'):
                 session.add(packet, 'training')
+
+    def test_stationary_session_records_timing_warnings_without_rejecting_capture(self):
+        packet = self.packet()
+        batch = packet['batch']
+        frame = batch.frames[batch.serials[0]]
+        frame.exposure_us += 1000
+        frame.timestamp_ns += 1_000_000
+        batch.timing_warnings['ptp:test'] = 'Clock offset beyond motion limit'
+        with tempfile.TemporaryDirectory() as directory:
+            stationary = Session(directory, BOARD, batch.serials, simulated=True, capture_mode='stationary')
+            stationary.add(packet, 'training')
+            saved = json.loads((stationary.directory / 'manifest.json').read_text())
+            self.assertEqual(saved['capture_mode'], 'stationary')
+            self.assertEqual(saved['captures'][0]['capture_mode'], 'stationary')
+            self.assertEqual(len(saved['captures'][0]['timing_warnings']), 2)
+            moving = Session(directory, BOARD, batch.serials, simulated=True, capture_mode='motion')
+            with self.assertRaisesRegex(ValueError, 'Clock offset'):
+                moving.add(packet, 'training')
+            self.assertEqual(moving.samples, [])
 
     def test_reserved_pose_matching_detects_repeated_validation_geometry(self):
         packet = self.packet()

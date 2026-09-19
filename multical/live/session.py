@@ -14,7 +14,10 @@ import numpy as np
 
 
 class Session:
-    def __init__(self, output, board_file, serials, simulated=False):
+    def __init__(self, output, board_file, serials, simulated=False, capture_mode='stationary'):
+        if capture_mode not in ('stationary', 'motion'):
+            raise ValueError('Capture mode must be stationary or motion')
+        self.capture_mode = capture_mode
         self.directory = Path(output) / (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:6])
         self.directory.mkdir(parents=True, exist_ok=False)
         self.serials = tuple(serials)
@@ -23,6 +26,7 @@ class Session:
         board_bytes = Path(board_file).read_bytes()
         (self.directory / 'board.yaml').write_bytes(board_bytes)
         self.manifest = dict(schema_version=1, simulated=simulated,
+                             capture_mode=capture_mode,
                              camera_serials=list(serials), captures=[],
                              board_sha256=hashlib.sha256(board_bytes).hexdigest(),
                              versions=dict(python=platform.python_version(), opencv=cv2.__version__, numpy=np.__version__),
@@ -39,7 +43,7 @@ class Session:
         if role not in ('training', 'validation'):
             raise ValueError('Unknown capture role')
         batch = packet['batch']
-        problems = batch.problems()
+        problems = batch.problems(capture_mode=self.capture_mode)
         if problems:
             raise ValueError('; '.join(problems))
         if batch.serials != self.serials:
@@ -51,7 +55,8 @@ class Session:
         final = self.directory / capture_id
         staging.mkdir()
         record = dict(id=capture_id, role=role, sequence=batch.sequence,
-                      scheduled_ns=batch.scheduled_ns, frames={}, detections={})
+                      scheduled_ns=batch.scheduled_ns, frames={}, detections={},
+                      capture_mode=self.capture_mode, timing_warnings=batch.timing_issues())
         try:
             for serial in self.serials:
                 frame = batch.frames[serial]

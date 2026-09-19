@@ -286,6 +286,12 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.source_choice.addItems(['FLIR cameras · PySpin', 'Simulated rig · testing'])
         self.source_choice.setCurrentIndex(1 if args.demo else 0)
         controls.addWidget(self.source_choice)
+        self.capture_mode = QtWidgets.QComboBox()
+        self.capture_mode.addItem('Stationary board', 'stationary')
+        self.capture_mode.addItem('Moving board · strict timing', 'motion')
+        self.capture_mode.setCurrentIndex(1 if getattr(args, 'capture_mode', 'stationary') == 'motion' else 0)
+        self.capture_mode.setToolTip('Hold the board still during each capture. Different fixed exposures are allowed in stationary mode.')
+        controls.addWidget(self.capture_mode)
         controls.addWidget(label('Expected cameras', 'muted'))
         self.count = QtWidgets.QSpinBox()
         self.count.setRange(1, 64)
@@ -294,7 +300,7 @@ class LiveWindow(QtWidgets.QMainWindow):
         controls.addWidget(label('Camera serials (optional, comma separated)', 'muted'))
         self.serials = QtWidgets.QLineEdit(','.join(args.serials))
         controls.addWidget(self.serials)
-        controls.addWidget(label('Shared exposure (µs) / gain (dB)', 'muted'))
+        controls.addWidget(label('Exposure (µs) / gain (dB) override · optional', 'muted'))
         exposure_row = QtWidgets.QHBoxLayout()
         self.exposure = QtWidgets.QLineEdit('' if args.exposure_us is None else str(args.exposure_us))
         self.gain = QtWidgets.QLineEdit('' if args.gain_db is None else str(args.gain_db))
@@ -475,6 +481,7 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.overlaps.setRowCount(0)
         self.inspection.image = None
         demo = self.source_choice.currentIndex() == 1
+        capture_mode = self.capture_mode.currentData()
         if demo:
             source = SimulatedSource(self.board, self.count.value(), fps=self.args.fps)
         else:
@@ -491,8 +498,9 @@ class LiveWindow(QtWidgets.QMainWindow):
                 self.fail('Enter a positive exposure in microseconds and a finite gain in dB, or leave them blank.')
                 return
             source = PySpinSource(serials, self.count.value(), fps=self.args.fps, sdk_path=self.args.sdk_path,
-                                  exposure_us=exposure, gain_db=gain)
-        self.engine = LiveEngine(source, self.board, self.board_file, self.args.output, self.args.workers)
+                                  exposure_us=exposure, gain_db=gain, capture_mode=capture_mode)
+        self.engine = LiveEngine(source, self.board, self.board_file, self.args.output, self.args.workers,
+                                 capture_mode=capture_mode)
         self.engine.auto_capture = self.auto.isChecked()
         self.engine.start()
         self.mode_badge.setText('SIMULATION · generated images' if demo else 'LIVE · direct PySpin')
@@ -624,7 +632,7 @@ class LiveWindow(QtWidgets.QMainWindow):
         running = self.engine is not None and self.engine.running()
         ready = running and self.engine.session is not None and not self.engine.stop_event.is_set()
         self.start_button.setText('Disconnect cameras' if running else 'Connect cameras')
-        for item in (self.source_choice, self.count, self.serials, self.board_button, self.seed_button, self.exposure, self.gain):
+        for item in (self.source_choice, self.capture_mode, self.count, self.serials, self.board_button, self.seed_button, self.exposure, self.gain):
             item.setEnabled(not running and self.process is None)
         self.training_button.setEnabled(ready)
         self.validation_button.setEnabled(ready)
@@ -681,6 +689,7 @@ class LiveWindow(QtWidgets.QMainWindow):
                 self.select(batch.serials[0])
             spread = batch.spread_us
             self.wall_title.setText(f'CAMERA WALL · {len(batch.frames)}/{len(batch.serials)} · ' + (f'{spread:.1f} µs start spread' if spread is not None else 'single camera'))
+            self.wall_title.setToolTip('\n'.join(batch.timing_issues()) or 'No motion-timing warnings')
             self.last_batch = batch
         if packet and packet is not self.last_packet:
             self.prediction = None

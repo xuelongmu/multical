@@ -8,7 +8,10 @@ from .session import Session
 
 
 class LiveEngine:
-    def __init__(self, source, board, board_file, output, workers=4):
+    def __init__(self, source, board, board_file, output, workers=4, capture_mode='stationary'):
+        if capture_mode not in ('stationary', 'motion'):
+            raise ValueError('Capture mode must be stationary or motion')
+        self.capture_mode = capture_mode
         self.source, self.board = source, board
         self.board_file, self.output = board_file, output
         self.workers = workers
@@ -38,7 +41,8 @@ class LiveEngine:
             serials = self.source.open()
             coverage = Coverage(serials)
             session = Session(self.output, self.board_file, serials,
-                              simulated=self.source.__class__.__name__ == 'SimulatedSource')
+                              simulated=self.source.__class__.__name__ == 'SimulatedSource',
+                              capture_mode=self.capture_mode)
             with self.lock:
                 self.coverage, self.session = coverage, session
                 self.validation_coverage = Coverage(serials)
@@ -77,7 +81,7 @@ class LiveEngine:
                 try:
                     jobs = {s: pool.submit(observe, self.board, f) for s, f in batch.frames.items()}
                     observations = {s: future.result() for s, future in jobs.items()}
-                    problems = batch.problems()
+                    problems = batch.problems(capture_mode=self.capture_mode)
                     now = time.monotonic()
                     packet = dict(batch=batch, observations=observations, analyzed_at=now,
                                   problems=problems)

@@ -41,15 +41,17 @@ class FrameSet:
     frames: dict
     errors: dict = field(default_factory=dict)
     simulated: bool = False
+    timing_warnings: dict = field(default_factory=dict)
 
-    def problems(self, max_spread_us=20.0):
+    def problems(self, max_spread_us=20.0, capture_mode='stationary'):
+        if capture_mode not in ('stationary', 'motion'):
+            raise ValueError('Capture mode must be stationary or motion')
         issues = list(self.errors.values())
         missing = set(self.serials) - set(self.frames)
         if missing:
             issues.append("Missing cameras: " + ", ".join(sorted(missing)))
         if set(self.frames) - set(self.serials):
             issues.append("Unexpected camera identity")
-        starts = []
         for serial, frame in self.frames.items():
             if serial != frame.serial or not np.isfinite(frame.exposure_us) or frame.exposure_us <= 0:
                 issues.append(f"{serial}: invalid identity or exposure")
@@ -58,10 +60,18 @@ class FrameSet:
                 issues.append(f"{serial}: invalid image")
             if abs(frame.start_ns - self.scheduled_ns) > 1_000_000:
                 issues.append(f"{serial}: frame does not match the scheduled action")
-            starts.append(frame.start_ns)
+        if capture_mode == 'motion':
+            issues.extend(self.timing_issues(max_spread_us))
+        return issues
+
+    def timing_issues(self, max_spread_us=20.0):
+        """Motion-capture diagnostics; advisory for a board held stationary."""
+        issues = list(self.timing_warnings.values())
+        frames = [f for f in self.frames.values() if np.isfinite(f.exposure_us) and f.exposure_us > 0]
+        starts = [f.start_ns for f in frames]
         if len(starts) > 1 and (max(starts) - min(starts)) / 1000 > max_spread_us:
             issues.append(f"Exposure-start spread exceeds {max_spread_us:g} us")
-        midpoints = [f.timestamp_ns - f.exposure_us*500 for f in self.frames.values()]
+        midpoints = [f.timestamp_ns - f.exposure_us*500 for f in frames]
         if len(midpoints) > 1 and (max(midpoints) - min(midpoints)) / 1000 > max_spread_us:
             issues.append('Exposure midpoints differ; use a shared exposure for all cameras')
         return issues
@@ -127,7 +137,7 @@ class SimulatedSource:
 
 
 class PTPNotReady(RuntimeError):
-    """A clock quality failure blocks retention without disabling live preview."""
+    """A clock quality diagnostic, interpreted according to capture mode."""
 
 
 class PySpinSource:
@@ -137,7 +147,10 @@ class PySpinSource:
     multi-interface action commands). No Captury process or files are used.
     """
     def __init__(self, expected_serials=(), expected_count=25, fps=5.0, sdk_path=None,
-                 exposure_us=None, gain_db=None):
+                 exposure_us=None, gain_db=None, capture_mode='stationary'):
+        if capture_mode not in ('stationary', 'motion'):
+            raise ValueError('Capture mode must be stationary or motion')
+        self.capture_mode = capture_mode
         self.expected_serials = tuple(expected_serials)
         self.expected_count = expected_count
         self.fps, self.sdk_path = fps, sdk_path
@@ -241,7 +254,12 @@ class PySpinSource:
             state = dict(serial=serial, cam=cam, restore=[], acquiring=False)
             self.held.append(state)
             nm = cam.GetNodeMap()
-            self._ptp(cam)
+            try:
+                self._ptp(cam)
+            except PTPNotReady as exc:
+                if self.capture_mode == 'motion':
+                    raise
+                self.ptp_problems['ptp:' + serial] = f'{serial}: {exc}'
             state['trigger_selector'] = self._get(nm, 'TriggerSelector', 'Enumeration')
             self._set(nm, 'TriggerSelector', 'Enumeration', 'FrameStart')
             state['trigger_mode'] = self._get(nm, 'TriggerMode', 'Enumeration')
@@ -315,7 +333,7 @@ class PySpinSource:
                 self._set(inm, name, 'Integer', value)
             self._command(inm, 'ActionCommand')
         futures = [(s['serial'], self.pool.submit(self._collect, s)) for s in self.held]
-        frames, errors = {}, dict(self.ptp_problems)
+        frames, errors = {}, {}
         for serial, future in futures:
             try:
                 frame = future.result()
@@ -329,7 +347,8 @@ class PySpinSource:
             except Exception as exc:
                 errors[serial] = f"{serial}: {exc}"
         self.sequence += 1
-        return FrameSet(self.sequence, scheduled, self.serials, frames, errors)
+        return FrameSet(self.sequence, scheduled, self.serials, frames, errors,
+                        timing_warnings=dict(self.ptp_problems))
 
     def close(self):
         failures = []

@@ -25,6 +25,7 @@ class LiveEngine:
         self.status = 'Connecting cameras…'
         self.error = None
         self.pending_capture = None
+        self.capture_event = None
         self.auto_capture = False
         self.auto_capture_role = 'training'
         self.paused = False
@@ -136,6 +137,7 @@ class LiveEngine:
                             if requested_role == self.pending_capture:
                                 self.pending_capture = None
                             self.status = f"Saved {role} pose {record['id']}"
+                            self.capture_event = dict(id=record['id'], role=role, session=str(self.session.directory))
                     guiding = self.validation_coverage if self.auto_capture and self.auto_capture_role == 'validation' else self.coverage
                     packet['guidance'] = guiding.guidance(observations, problems)
                     if partition_conflict:
@@ -184,7 +186,7 @@ class LiveEngine:
         with self.lock:
             return dict(batch=self.latest_batch, packet=self.packet, status=self.status,
                         error=self.error, pending=self.pending_capture, paused=self.paused,
-                        session=self.session)
+                        session=self.session, capture_event=self.capture_event)
 
     def stop(self):
         self.stop_event.set()

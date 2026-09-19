@@ -13,6 +13,7 @@ from multical.board import load_config
 from multical.io.interop import load_seed, load_captury_seed, validate_seed_geometry
 from .calibration import solve_process
 from .engine import LiveEngine
+from .audio import CaptureSounds
 from .guidance import capture_progress, inspection_advice, inspection_group
 from .metrics import GRID, live_projection
 from .session import write_result
@@ -271,6 +272,11 @@ class LiveWindow(QtWidgets.QMainWindow):
     def __init__(self, args):
         super().__init__()
         self.args = args
+        self.capture_sounds = CaptureSounds(self)
+        self.last_sound_event = None
+        preferences = Path(__file__).resolve().parents[2] / 'live-sessions' / 'ui-preferences.ini'
+        preferences.parent.mkdir(parents=True, exist_ok=True)
+        self.preferences = QtCore.QSettings(str(preferences), QtCore.QSettings.IniFormat)
         self.board_file = str(Path(args.boards).resolve())
         self.board = self._load_board(self.board_file)
         self.engine = self.result = self.process = self.connection = None
@@ -364,7 +370,24 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.auto.setToolTip('Save new steady poses in the selected role. Validation needs two usable cameras and stays separate from training.')
         self.auto.setChecked(args.auto_capture)
         self.auto.toggled.connect(self.set_auto)
-        controls.addWidget(self.auto)
+        auto_options = QtWidgets.QHBoxLayout()
+        auto_options.addWidget(self.auto)
+        self.sounds = QtWidgets.QCheckBox('Sounds')
+        self.sounds.setChecked(self.preferences.value('sounds/enabled', True, type=bool))
+        self.sounds.setToolTip('Saved training: one tone. Saved validation: two rising tones. No sound for unsaved detections.')
+        self.sounds.toggled.connect(self.set_sounds)
+        auto_options.addWidget(self.sounds)
+        sound_test = QtWidgets.QToolButton()
+        sound_test.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_MediaVolume))
+        sound_test.setToolTip('Test training and validation sounds')
+        sound_test.setAccessibleName('Test capture sounds')
+        sound_test.clicked.connect(self.test_sounds)
+        auto_options.addWidget(sound_test)
+        if self.capture_sounds.error:
+            self.sounds.setEnabled(False)
+            sound_test.setEnabled(False)
+            self.sounds.setToolTip('Audio unavailable: ' + self.capture_sounds.error)
+        controls.addLayout(auto_options)
         self.auto_role = QtWidgets.QComboBox()
         self.auto_role.addItem('Training', 'training')
         self.auto_role.addItem('Validation', 'validation')
@@ -746,6 +769,27 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.engine.start()
         self.mode_badge.setText('SIMULATION · generated images' if demo else 'LIVE · direct PySpin')
 
+    def set_sounds(self, enabled):
+        self.preferences.setValue('sounds/enabled', enabled)
+        self.preferences.sync()
+        if not enabled:
+            self.capture_sounds.stop()
+
+    def test_sounds(self):
+        if self.sounds.isChecked():
+            self.capture_sounds.play('training')
+            QtCore.QTimer.singleShot(350, lambda: self.capture_sounds.play('validation') if self.sounds.isChecked() else None)
+
+    def notify_capture(self, event):
+        if event is None:
+            return
+        key = (event['session'], event['id'])
+        if key == self.last_sound_event:
+            return
+        self.last_sound_event = key
+        if self.sounds.isChecked():
+            self.capture_sounds.play(event['role'])
+
     def set_auto_role(self, _index):
         if self.engine:
             with self.engine.lock:
@@ -1023,6 +1067,7 @@ class LiveWindow(QtWidgets.QMainWindow):
         if self.engine is None:
             return
         state = self.engine.snapshot()
+        self.notify_capture(state.get('capture_event'))
         if state['error']:
             self.fail(state['error'])
         session = state['session']

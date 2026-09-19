@@ -4,6 +4,7 @@ from threading import Event, Lock, Thread
 import time
 
 from .metrics import Coverage, observe
+from .guidance import capture_progress
 from .session import Session
 
 
@@ -128,8 +129,11 @@ class LiveEngine:
                                          (role == 'training' and self.validation_coverage.matches_pose(observations))
                     if role and not self.paused and usable and not problems and not partition_conflict and batch.sequence != self.captured_sequence:
                         record = self.session.add(packet, role)
+                        milestone = False
                         if role == 'training':
+                            before = len(capture_progress(self.coverage.snapshot(), {})['groups'])
                             self.coverage.add(observations)
+                            milestone = len(capture_progress(self.coverage.snapshot(), {})['groups']) < before
                         else:
                             self.validation_coverage.add(observations)
                         self.captured_sequence = batch.sequence
@@ -137,9 +141,18 @@ class LiveEngine:
                             if requested_role == self.pending_capture:
                                 self.pending_capture = None
                             self.status = f"Saved {role} pose {record['id']}"
-                            self.capture_event = dict(id=record['id'], role=role, session=str(self.session.directory))
+                            self.capture_event = dict(id=record['id'], role=role, session=str(self.session.directory), milestone=milestone)
                     guiding = self.validation_coverage if self.auto_capture and self.auto_capture_role == 'validation' else self.coverage
                     packet['guidance'] = guiding.guidance(observations, problems)
+                    visible_count = sum(bool(o['usable']) for o in observations.values())
+                    packet['guidance_cue'] = None
+                    if not problems:
+                        if visible_count == 1 and len(self.coverage.serials) > 1:
+                            packet['guidance_cue'] = 'single'
+                        elif visible_count and not stationary:
+                            packet['guidance_cue'] = 'hold'
+                        elif visible_count and not any(guiding.novel(s, o) for s, o in observations.items() if o['usable']):
+                            packet['guidance_cue'] = 'tilt'
                     if partition_conflict:
                         packet['guidance'] = 'Move to a different board pose. Training and validation poses are kept separate.'
                     packet['coverage'] = self.coverage.snapshot()

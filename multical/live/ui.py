@@ -13,7 +13,7 @@ from multical.board import load_config
 from multical.io.interop import load_seed, load_captury_seed, validate_seed_geometry
 from .calibration import solve_process
 from .engine import LiveEngine
-from .audio import CaptureSounds
+from .audio import CaptureSounds, AttentionCue, GuidanceCue
 from .guidance import capture_progress, inspection_advice, inspection_group
 from .metrics import GRID, live_projection
 from .session import write_result
@@ -274,6 +274,9 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.args = args
         self.capture_sounds = CaptureSounds(self)
         self.last_sound_event = None
+        self.attention_cue = AttentionCue()
+        self.guidance_cue = GuidanceCue()
+        self.last_capture_sound_at = float('-inf')
         preferences = Path(__file__).resolve().parents[2] / 'live-sessions' / 'ui-preferences.ini'
         preferences.parent.mkdir(parents=True, exist_ok=True)
         self.preferences = QtCore.QSettings(str(preferences), QtCore.QSettings.IniFormat)
@@ -374,14 +377,21 @@ class LiveWindow(QtWidgets.QMainWindow):
         auto_options.addWidget(self.auto)
         self.sounds = QtWidgets.QCheckBox('Sounds')
         self.sounds.setChecked(self.preferences.value('sounds/enabled', True, type=bool))
-        self.sounds.setToolTip('Saved training: one tone. Saved validation: two rising tones. No sound for unsaved detections.')
+        self.sounds.setToolTip('Training: single tone. Validation: two rising tones. Groups joined: rising chime. Capture blocked: low falling tones. Guidance: hold still, change tilt, one camera only. Hover the speaker menu to preview cues.')
         self.sounds.toggled.connect(self.set_sounds)
         auto_options.addWidget(self.sounds)
         sound_test = QtWidgets.QToolButton()
         sound_test.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_MediaVolume))
-        sound_test.setToolTip('Test training and validation sounds')
+        sound_test.setToolTip('Preview sound cues')
         sound_test.setAccessibleName('Test capture sounds')
-        sound_test.clicked.connect(self.test_sounds)
+        sound_menu = QtWidgets.QMenu(sound_test)
+        for cue, title in [('training', 'Training saved'), ('validation', 'Validation saved'),
+                           ('attention', 'Attention: capture blocked'), ('milestone', 'Milestone: groups joined'),
+                           ('hold', 'Hold still'), ('tilt', 'Change tilt or position'), ('single', 'Only one camera sees board')]:
+            action = sound_menu.addAction(title)
+            action.triggered.connect(lambda checked=False, role=cue: self.preview_sound(role))
+        sound_test.setMenu(sound_menu)
+        sound_test.setPopupMode(QtWidgets.QToolButton.InstantPopup)
         auto_options.addWidget(sound_test)
         if self.capture_sounds.error:
             self.sounds.setEnabled(False)
@@ -775,10 +785,14 @@ class LiveWindow(QtWidgets.QMainWindow):
         if not enabled:
             self.capture_sounds.stop()
 
+    def preview_sound(self, role):
+        if self.sounds.isChecked():
+            self.capture_sounds.play(role)
+
     def test_sounds(self):
         if self.sounds.isChecked():
-            self.capture_sounds.play('training')
-            QtCore.QTimer.singleShot(350, lambda: self.capture_sounds.play('validation') if self.sounds.isChecked() else None)
+            for delay, cue in ((0, 'training'), (350, 'validation'), (900, 'attention'), (1500, 'milestone')):
+                QtCore.QTimer.singleShot(delay, lambda role=cue: self.capture_sounds.play(role) if self.sounds.isChecked() else None)
 
     def notify_capture(self, event):
         if event is None:
@@ -787,8 +801,9 @@ class LiveWindow(QtWidgets.QMainWindow):
         if key == self.last_sound_event:
             return
         self.last_sound_event = key
+        self.last_capture_sound_at = time.monotonic()
         if self.sounds.isChecked():
-            self.capture_sounds.play(event['role'])
+            self.capture_sounds.play('milestone' if event.get('milestone') else event['role'])
 
     def set_auto_role(self, _index):
         if self.engine:
@@ -1068,6 +1083,18 @@ class LiveWindow(QtWidgets.QMainWindow):
             return
         state = self.engine.snapshot()
         self.notify_capture(state.get('capture_event'))
+        batch_for_audio = state.get('batch')
+        blocked = bool(state['error']) or bool(batch_for_audio and batch_for_audio.problems(capture_mode=self.engine.capture_mode))
+        audible = self.attention_cue.update(blocked, time.monotonic(),
+            active=not self.closing and not switching and not state['paused'] and (ready or bool(state['error'])),
+            fatal=bool(state['error']))
+        if audible and self.sounds.isChecked():
+            self.capture_sounds.play('attention')
+        hint = self.guidance_cue.update((state.get('packet') or {}).get('guidance_cue'), time.monotonic(),
+            active=ready and not blocked and not switching and not state['paused'] and not self.closing
+                   and time.monotonic() - self.last_capture_sound_at >= 3.)
+        if hint and self.sounds.isChecked():
+            self.capture_sounds.play(hint)
         if state['error']:
             self.fail(state['error'])
         session = state['session']

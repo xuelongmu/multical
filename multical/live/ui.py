@@ -53,6 +53,21 @@ def label(text, name=None):
     return item
 
 
+def capture_icon(paused):
+    pixels = QtGui.QPixmap(20, 20)
+    pixels.fill(QtCore.Qt.transparent)
+    painter = QtGui.QPainter(pixels)
+    painter.setPen(QtCore.Qt.NoPen)
+    painter.setBrush(QtGui.QColor('#eeeeee'))
+    if paused:
+        painter.drawPolygon(QtGui.QPolygon([QtCore.QPoint(6, 3), QtCore.QPoint(17, 10), QtCore.QPoint(6, 17)]))
+    else:
+        painter.drawRect(5, 4, 4, 12)
+        painter.drawRect(12, 4, 4, 12)
+    painter.end()
+    return QtGui.QIcon(pixels)
+
+
 def as_image(pixels, width=900):
     h, w = pixels.shape[:2]
     if w > width:
@@ -401,6 +416,7 @@ class LiveWindow(QtWidgets.QMainWindow):
             if button is self.pause_button:
                 session_controls.addStretch()
             session_controls.addWidget(button)
+        self.pause_button.setIcon(capture_icon(False))
         controls.insertLayout(0, session_controls)
         self.guidance = label('Connect cameras to begin.', 'guidance')
         main.addWidget(self.guidance)
@@ -564,7 +580,7 @@ class LiveWindow(QtWidgets.QMainWindow):
             self.engine.set_paused(paused)
         self.pause_button.setAccessibleName('Resume capture' if paused else 'Pause capture')
         self.pause_button.setToolTip('Resume capture' if paused else 'Pause capture — previews continue; an in-progress save may finish.')
-        self.pause_button.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_MediaPlay if paused else QtWidgets.QStyle.SP_MediaPause))
+        self.pause_button.setIcon(capture_icon(paused))
 
     def switch_session(self, configure):
         self.cancel_solve()

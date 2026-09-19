@@ -1,1 +1,4 @@
 include multical/interface/*.ui
+include multical/live/*.yaml
+include multical/live/*.svg
+include multical/live/sounds/*.wav

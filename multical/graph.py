@@ -11,6 +11,7 @@ def select_pairs(overlaps, hop_penalty=0.8):
   returns: root, a list of pairs
   """
 
+  overlaps = np.array(overlaps, copy=True)
   n = overlaps.shape[0]
 
   master = np.argmax(overlaps.sum(1))

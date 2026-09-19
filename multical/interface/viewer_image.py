@@ -157,7 +157,7 @@ def annotate_image(workspace, calibration, layer, state, options):
       if pose.valid:
         projected = Table.create(
           points = camera.project(board.points, pose.poses),
-          valid = np.ones(board.points.shape[0], dtype=np.bool)
+          valid = np.ones(board.points.shape[0], dtype=bool)
         )
         add_point_markers(scene, projected, board, color, options)
 

@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+LIVE_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+LIVE_PYTHON="${MULTICAL_PYTHON:-}"
+if [[ -z "$LIVE_PYTHON" && -x "$LIVE_ROOT/.venv/bin/python" ]]; then
+    LIVE_PYTHON="$LIVE_ROOT/.venv/bin/python"
+fi
+if [[ -z "$LIVE_PYTHON" ]]; then
+    LIVE_GIT_COMMON="$(git -C "$LIVE_ROOT" rev-parse --path-format=absolute --git-common-dir)"
+    LIVE_SHARED_PYTHON="$(dirname -- "$LIVE_GIT_COMMON")/.venv/bin/python"
+    if [[ -x "$LIVE_SHARED_PYTHON" ]]; then
+        LIVE_PYTHON="$LIVE_SHARED_PYTHON"
+    else
+        LIVE_PYTHON=python3
+    fi
+fi
+cd -- "$LIVE_ROOT"
+exec "$LIVE_PYTHON" -m multical.live "$@"

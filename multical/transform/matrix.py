@@ -142,12 +142,15 @@ def align_transforms_robust(m1, m2, valid=None, threshold=1.5):
     threshold (float): factor of upper quartile to be determined as an outlier.
   """
 
-  mask = choose(valid, np.ones(m1.shape[0], dtype=np.bool))
+  mask = choose(valid, np.ones(m1.shape[0], dtype=bool))
+  if not np.any(mask):
+    raise ValueError("Cannot align poses without a valid shared observation")
 
   m = align_transforms_mean(m1[mask], m2[mask])
   errs = error_transform(m, m1, m2)
 
-  inliers = test_outlier(errs, threshold) & mask
+  cutoff = max(float(np.quantile(errs[mask], 0.75)) * threshold, 1e-9)
+  inliers = (errs <= cutoff) & mask
   m = align_transforms_mean(m1[inliers], m2[inliers])
 
   return m, inliers
@@ -162,5 +165,4 @@ def pose_errors(p1, p2):
     rotation_deg = R.magnitude(R.from_matrix(r)) * 180.0 / math.pi,
     frobius = np.linalg.norm(p1 - p2, axis=(1, 2))
   )
-
 

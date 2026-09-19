@@ -43,7 +43,7 @@ def select_threshold(quantile=0.75, factor=5.0):
 class Calibration(parameters.Parameters):
   def __init__(self, cameras : ParamList[Camera], boards : ParamList[Board], point_table : Table, 
     camera_poses : PoseSet, board_poses : PoseSet, 
-    motion : MotionModel, inlier_mask=None, optimize=default_optimize):
+    motion : MotionModel, inlier_mask=None, optimize=default_optimize, solver_status=None):
 
     self.cameras = cameras
     self.boards = boards
@@ -55,6 +55,7 @@ class Calibration(parameters.Parameters):
 
     self.optimize = optimize    
     self.inlier_mask = inlier_mask
+    self.solver_status = solver_status
     
     assert len(self.cameras) == self.size.cameras
     assert camera_poses.size == self.size.cameras
@@ -209,7 +210,9 @@ class Calibration(parameters.Parameters):
       res = optimize.least_squares(evaluate, self.param_vec, jac_sparsity=self.sparsity_matrix, 
         verbose=2, x_scale='jac', f_scale=f_scale, ftol=tolerance, max_nfev=max_iterations, method='trf', loss=loss)
   
-    return self.with_param_vec(res.x)
+    return self.with_param_vec(res.x).copy(solver_status=dict(
+      success=bool(res.success), status=int(res.status), message=str(res.message),
+      evaluations=int(res.nfev), cost=float(res.cost), optimality=float(res.optimality)))
   
   def enable(self, **flags):
     for k in flags.keys():
@@ -221,7 +224,7 @@ class Calibration(parameters.Parameters):
 
   def __getstate__(self):
     attrs = ['cameras', 'boards', 'point_table', 'camera_poses', 'board_poses', 
-      'motion', 'inlier_mask', 'optimize'
+      'motion', 'inlier_mask', 'optimize', 'solver_status'
     ]
     return subset(self.__dict__, attrs)
 
@@ -304,11 +307,10 @@ class Calibration(parameters.Parameters):
 def error_stats(errors):
   # Handling empty error array
   if(len(errors)==0):
-    errors = np.zeros((1,1),np.float32)
+    return struct(mse=np.nan, rms=np.nan, quantiles=np.full(5, np.nan), n=0)
   mse = np.square(errors).mean()
   quantiles = np.array([np.quantile(errors, n) for n in [0, 0.25, 0.5, 0.75, 1]])
   return struct(mse = mse, rms = np.sqrt(mse), quantiles=quantiles, n = errors.size)
-
 
 
 

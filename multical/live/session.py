@@ -14,10 +14,31 @@ import numpy as np
 
 
 class Session:
-    def __init__(self, output, board_file, serials, simulated=False, capture_mode='stationary'):
+    def __init__(self, output, board_file, serials, simulated=False, capture_mode='stationary', resume=None):
         if capture_mode not in ('stationary', 'motion'):
             raise ValueError('Capture mode must be stationary or motion')
         self.capture_mode = capture_mode
+        if resume:
+            self.directory = Path(resume)
+            manifest = json.loads((self.directory / 'manifest.json').read_text())
+            if (manifest.get('schema_version') != 1 or
+                manifest['camera_serials'] != list(serials) or
+                manifest['board_sha256'] != hashlib.sha256(Path(board_file).read_bytes()).hexdigest() or
+                manifest['simulated'] != simulated or
+                manifest.get('capture_mode', 'stationary') != capture_mode):
+                raise ValueError('Resume session must match board, camera roster, source type and capture mode')
+            self.serials = tuple(serials)
+            self.manifest = manifest
+            self.samples = list(manifest['captures'])
+            for index, record in enumerate(self.samples):
+                if record['id'] != f'{index:06d}' or record['role'] not in ('training', 'validation'):
+                    raise ValueError('Invalid capture ordering or role in resumed session')
+                for serial in serials:
+                    if not (self.directory / record['id'] / f'{serial}.png').is_file():
+                        raise ValueError(f"Missing saved image: {record['id']}/{serial}")
+            if (self.directory / f'{len(self.samples):06d}').exists():
+                raise ValueError('Uncommitted capture directory exists; inspect it before resuming')
+            return
         self.directory = Path(output) / (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:6])
         self.directory.mkdir(parents=True, exist_ok=False)
         self.serials = tuple(serials)
@@ -48,6 +69,10 @@ class Session:
             raise ValueError('; '.join(problems))
         if batch.serials != self.serials:
             raise ValueError('Camera roster changed')
+        if self.samples:
+            for serial in self.serials:
+                if batch.frames[serial].metadata()['image_size'] != self.samples[0]['frames'][serial]['image_size']:
+                    raise ValueError(f'{serial}: image geometry changed since the first capture')
         if any(r['sequence'] == batch.sequence for r in self.samples):
             raise ValueError('This frame set has already been retained')
         capture_id = f'{len(self.samples):06d}'

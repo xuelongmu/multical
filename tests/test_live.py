@@ -272,6 +272,36 @@ class CoverageAndSessionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'already been retained'):
                 session.add(packet, 'training')
 
+    def test_resume_restores_captures_coverage_and_sequence_without_overwrite(self):
+        from multical.live.engine import LiveEngine
+        packet = self.packet()
+        with tempfile.TemporaryDirectory() as directory:
+            session = Session(directory, BOARD, packet['batch'].serials)
+            session.add(packet, 'training')
+            original = (session.directory / '000000/SIM-01.png').read_bytes()
+            source = Mock()
+            source.open.return_value = packet['batch'].serials
+            engine = LiveEngine(source, self.board, BOARD, directory, resume=session.directory)
+            fresh = self.packet()
+            fresh['batch'].sequence = 0
+            def read():
+                engine.stop_event.set()
+                return fresh['batch']
+            source.read.side_effect = read
+            engine._acquire()
+            self.assertIsNone(engine.error)
+            self.assertEqual(len(engine.session.samples), 1)
+            self.assertTrue(all(v == 1 for v in engine.coverage.views.values()))
+            self.assertGreater(engine.latest_batch.sequence, session.samples[0]['sequence'])
+            engine.session.add(fresh, 'training')
+            self.assertEqual(len(engine.session.samples), 2)
+            self.assertEqual((session.directory / '000000/SIM-01.png').read_bytes(), original)
+            with self.assertRaisesRegex(ValueError, 'must match'):
+                Session(directory, BOARD, packet['batch'].serials, simulated=True, resume=session.directory)
+            (session.directory / '000000/SIM-01.png').unlink()
+            with self.assertRaisesRegex(ValueError, 'Missing saved image'):
+                Session(directory, BOARD, packet['batch'].serials, resume=session.directory)
+
     def test_stationary_session_records_timing_warnings_without_rejecting_capture(self):
         packet = self.packet()
         batch = packet['batch']

@@ -42,3 +42,24 @@ class GuidanceTests(unittest.TestCase):
         self.assertIn('advisory', inspection_advice(dict(usable=True, marker_px=10), True))
         self.assertIn('repeats', inspection_advice(dict(usable=True, marker_px=30), False))
         self.assertIn('Space', inspection_advice(dict(usable=True, marker_px=30), True))
+
+class GroupTests(unittest.TestCase):
+    coverage = GuidanceTests.coverage
+    def test_visible_bridge_before_known_partner(self):
+        from multical.live.guidance import inspection_group
+        coverage = self.coverage(views=(1, 2, 3), edges=[(0, 1)])
+        observations = {s: dict(usable=True) for s in 'ABC'}
+        group = inspection_group(coverage, observations, 'A')
+        self.assertEqual([s for s, _ in group], ['A', 'C', 'B'])
+        self.assertIn('bridge', group[1][1])
+
+    def test_unknown_overlap_is_not_presented_as_a_pair(self):
+        from multical.live.guidance import inspection_group
+        group = inspection_group(self.coverage(), {}, 'B')
+        self.assertEqual(group[0][0], 'B')
+        self.assertTrue(all('not established' in reason for _, reason in group[1:]))
+
+    def test_automatic_target_prefers_visible_camera_needing_views(self):
+        from multical.live.guidance import inspection_group
+        group = inspection_group(self.coverage(views=(0, 8, 2)), {'B': dict(usable=True), 'C': dict(usable=True)})
+        self.assertEqual(group[0][0], 'C')

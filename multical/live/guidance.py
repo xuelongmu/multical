@@ -46,3 +46,39 @@ def inspection_advice(observation, novel):
     if not novel:
         return 'This view repeats saved coverage. Move the board within the image, change its tilt or distance, then hold still.'
     return 'New view available. Hold still and press Space; include a second camera to connect their poses.'
+
+
+def inspection_group(coverage, observations, anchor=None, limit=4):
+    """Rank observed opportunities, never infer physical neighbours from serials."""
+    serials = list(coverage['views'])
+    if not serials:
+        return []
+    visible = {s for s, o in observations.items() if o['usable'] and s in serials}
+    need = lambda s: (coverage['views'][s], np.count_nonzero(coverage['cells'][s]), s)
+    if anchor not in serials:
+        anchor = min(visible or set(serials), key=need)
+    groups = capture_progress(coverage, {})['groups']
+    membership = {s: i for i, g in enumerate(groups) for s in g}
+    index = serials.index(anchor)
+    def rank(s):
+        shared = int(coverage['overlaps'][index, serials.index(s)])
+        # A currently co-visible camera from another component can bridge the rig.
+        if anchor in visible and s in visible:
+            tier = 0 if membership[s] != membership[anchor] else 1
+        elif shared:
+            tier = 2
+        else:
+            tier = 3
+        return (tier, *need(s))
+    partners = sorted((s for s in serials if s != anchor), key=rank)
+    result = [(anchor, 'Target: needs varied views')]
+    for s in partners[:max(0, limit-1)]:
+        shared = int(coverage['overlaps'][index, serials.index(s)])
+        if anchor in visible and s in visible:
+            reason = 'Visible now: bridge groups' if membership[s] != membership[anchor] else 'Visible together now'
+        elif shared:
+            reason = f'{shared} shared poses with target'
+        else:
+            reason = 'Scout: overlap not established'
+        result.append((s, reason))
+    return result[:limit]

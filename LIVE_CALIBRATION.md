@@ -6,6 +6,10 @@ The operator guide shows live corner counts on camera previews, selected-camera 
 
 Run from this worktree:
 
+**Four-camera view** and **Auto-focus needed views** are enabled by default. The target is reconsidered every 10 seconds, prioritizing currently usable cameras with fewer retained varied views. Partner panes prioritize current co-visibility across disconnected groups, other currently shared views, then previously observed overlaps. Unproven pairs are explicitly labelled **Scout: overlap not established**; serial numbers are never treated as physical neighbours. Pane assignments stay stable for 10 seconds. Clicking a camera or a metrics row disables auto-focus and pins the target; re-enable the checkbox to resume automatic selection. Switch off Four-camera view for one enlarged image. Each pane supports zoom/pan and shows detected corners and retained coverage.
+
+To continue the same collection after closing the old viewer, pass `--resume live-sessions/SESSION_DIRECTORY` with the same board, source type, roster and capture mode. Resume validates the saved session and image files, rebuilds coverage from saved images, and continues capture numbering without overwriting existing captures. Do not run two writers against one session. Supply the same `--seed` if the original session was seeded. This resumes collection; it does not automatically load a previous fitted result.
+
 ```bash
 ./run-live --demo --auto-capture
 ```

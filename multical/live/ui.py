@@ -13,7 +13,7 @@ from multical.board import load_config
 from multical.io.interop import load_seed, validate_seed_geometry
 from .calibration import solve_process
 from .engine import LiveEngine
-from .guidance import capture_progress, inspection_advice
+from .guidance import capture_progress, inspection_advice, inspection_group
 from .metrics import GRID, live_projection
 from .session import write_result
 from .sources import PySpinSource, SimulatedSource
@@ -256,6 +256,8 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.seed_checked = False
         self.last_packet = self.last_batch = None
         self.selected = None
+        self.focus_changed_at = 0.
+        self.quad_serials = []
         self.tiles = {}
         self.closing = False
         self.setWindowTitle('Multical Live — capture, inspect, calibrate')
@@ -392,8 +394,36 @@ class LiveWindow(QtWidgets.QMainWindow):
         detail_layout.setContentsMargins(8, 0, 0, 0)
         self.inspection_title = label('BOARD INSPECTION', 'muted')
         detail_layout.addWidget(self.inspection_title)
+        focus_controls = QtWidgets.QHBoxLayout()
+        self.four_up = QtWidgets.QCheckBox('Four-camera view')
+        self.four_up.setChecked(True)
+        self.auto_focus = QtWidgets.QCheckBox('Auto-focus needed views')
+        self.auto_focus.setChecked(True)
+        self.auto_focus.setToolTip('Reconsider the target every 10 seconds. Prefer cameras seeing the board with fewer saved views. Clicking a camera pins it by turning auto-focus off.')
+        focus_controls.addWidget(self.four_up)
+        focus_controls.addWidget(self.auto_focus)
+        detail_layout.addLayout(focus_controls)
+        self.quad = QtWidgets.QWidget()
+        quad_layout = QtWidgets.QGridLayout(self.quad)
+        quad_layout.setContentsMargins(0, 0, 0, 0)
+        self.quad_views, self.quad_labels = [], []
+        for i in range(4):
+            box = QtWidgets.QWidget()
+            layout = QtWidgets.QVBoxLayout(box)
+            layout.setContentsMargins(2, 2, 2, 2)
+            title = label('Waiting for cameras', 'muted')
+            view = InspectionView()
+            view.setMinimumSize(170, 120)
+            layout.addWidget(title)
+            layout.addWidget(view, 1)
+            self.quad_labels.append(title)
+            self.quad_views.append(view)
+            quad_layout.addWidget(box, i // 2, i % 2)
+        detail_layout.addWidget(self.quad, 1)
         self.inspection = InspectionView()
         detail_layout.addWidget(self.inspection, 1)
+        self.inspection.hide()
+        self.four_up.toggled.connect(self.toggle_four_up)
         self.inspection_info = label('Green: detected corners · amber: predicted corners from another camera', 'muted')
         detail_layout.addWidget(self.inspection_info)
         self.inspection_advice = label('Select a camera to see its capture advice.', 'muted')
@@ -497,6 +527,8 @@ class LiveWindow(QtWidgets.QMainWindow):
             tile.deleteLater()
         self.tiles = {}
         self.selected = None
+        self.focus_changed_at = 0.
+        self.quad_serials = []
         self.metrics.setRowCount(0)
         self.overlaps.setRowCount(0)
         self.inspection.image = None
@@ -520,7 +552,7 @@ class LiveWindow(QtWidgets.QMainWindow):
             source = PySpinSource(serials, self.count.value(), fps=self.args.fps, sdk_path=self.args.sdk_path,
                                   exposure_us=exposure, gain_db=gain, capture_mode=capture_mode)
         self.engine = LiveEngine(source, self.board, self.board_file, self.args.output, self.args.workers,
-                                 capture_mode=capture_mode)
+                                 capture_mode=capture_mode, resume=getattr(self.args, 'resume', None))
         self.engine.auto_capture = self.auto.isChecked()
         self.engine.start()
         self.mode_badge.setText('SIMULATION · generated images' if demo else 'LIVE · direct PySpin')
@@ -530,7 +562,50 @@ class LiveWindow(QtWidgets.QMainWindow):
             with self.engine.lock:
                 self.engine.auto_capture = enabled
 
+    def toggle_four_up(self, enabled):
+        self.quad.setVisible(enabled)
+        self.inspection.setVisible(not enabled)
+        if self.last_packet:
+            self.update_inspection(self.last_packet)
+
+    def update_focus(self, packet):
+        now = time.monotonic()
+        if self.auto_focus.isChecked() and now - self.focus_changed_at >= 10:
+            group = inspection_group(packet['coverage'], packet['observations'])
+            if group:
+                self.select(group[0][0], automatic=True)
+            self.focus_changed_at = now
+        if not self.quad_serials or now - getattr(self, 'group_changed_at', 0.) >= 10:
+            self.quad_serials = [s for s, reason in inspection_group(packet['coverage'], packet['observations'], self.selected)]
+            self.group_changed_at = now
+
+    def update_quad(self, packet):
+        ranked = dict(inspection_group(packet['coverage'], packet['observations'], self.selected, limit=len(packet['coverage']['views'])))
+        for i, view in enumerate(self.quad_views):
+            if i >= len(self.quad_serials):
+                view.image = view.observation = None
+                self.quad_labels[i].setText('No additional camera')
+                view.update()
+                continue
+            serial = self.quad_serials[i]
+            if getattr(view, 'serial', None) != serial:
+                view.serial = serial
+                view.zoom = 1.
+                view.pan = QtCore.QPointF(0, 0)
+            obs = packet['observations'].get(serial)
+            frame = packet['batch'].frames.get(serial)
+            count = len(obs['ids']) if obs else 0
+            self.quad_labels[i].setText(f"{serial} · {count}/{self.board.num_points} · {packet['coverage']['views'][serial]} poses\n{ranked.get(serial, 'Scout: overlap not established')}")
+            view.image = as_image(frame.image, 640) if frame else None
+            view.observation = dict(obs, image_size=frame.image.shape[1::-1]) if obs and frame else None
+            view.cells = packet['coverage']['cells'][serial]
+            view.prediction = (getattr(self, 'prediction', None) or {}).get('predictions', {}).get(serial)
+            view.update()
+
     def toggle_coverage(self, enabled):
+        for view in self.quad_views:
+            view.show_coverage = enabled
+            view.update()
         self.inspection.show_coverage = enabled
         self.inspection.update()
 
@@ -563,8 +638,12 @@ class LiveWindow(QtWidgets.QMainWindow):
             if progress['target']:
                 self.select(progress['target'])
 
-    def select(self, serial):
+    def select(self, serial, automatic=False):
+        if not automatic:
+            self.auto_focus.setChecked(False)
         self.selected = serial
+        self.quad_serials = []
+        self.focus_changed_at = time.monotonic()
         for s, tile in self.tiles.items():
             tile.active = s == serial
             tile.update()
@@ -572,6 +651,11 @@ class LiveWindow(QtWidgets.QMainWindow):
             self.update_inspection(self.last_packet)
 
     def update_inspection(self, packet):
+        if not self.quad_serials:
+            self.quad_serials = [s for s, _ in inspection_group(packet['coverage'], packet['observations'], self.selected)]
+            self.group_changed_at = time.monotonic()
+        if self.four_up.isChecked():
+            self.update_quad(packet)
         serial = self.selected
         observation = packet['observations'].get(serial)
         frame = packet['batch'].frames.get(serial)
@@ -697,6 +781,8 @@ class LiveWindow(QtWidgets.QMainWindow):
             self.session_label.setText(str(session.directory))
             self.saved_label.setText(state['status'] if samples else 'No poses saved yet.')
         batch, packet = state['batch'], state['packet']
+        if packet is None:
+            self.guidance.setText(state['status'])
         if self.seed is not None and not self.seed_checked and batch and len(batch.frames) == len(batch.serials):
             try:
                 validate_seed_geometry(self.seed, batch.serials, {s: f.metadata()['image_size'] for s, f in batch.frames.items()})
@@ -732,7 +818,7 @@ class LiveWindow(QtWidgets.QMainWindow):
                     tile.detail = 'MISSING FRAME'
                 tile.update()
             if self.selected is None:
-                self.select(batch.serials[0])
+                self.select(batch.serials[0], automatic=True)
             spread = batch.spread_us
             self.wall_title.setText(f'CAMERA WALL · {len(batch.frames)}/{len(batch.serials)} · ' + (f'{spread:.1f} µs start spread' if spread is not None else 'single camera'))
             self.wall_title.setToolTip('\n'.join(batch.timing_issues()) or 'No motion-timing warnings')
@@ -746,6 +832,7 @@ class LiveWindow(QtWidgets.QMainWindow):
                     pass
             self.rig.target = self.prediction
             self.rig.update()
+            self.update_focus(packet)
             self.update_inspection(packet)
             pending_text = f"{state['pending'].capitalize()} queued: " if state['pending'] else ''
             self.guidance.setText(pending_text + packet['guidance'])
@@ -763,7 +850,7 @@ class LiveWindow(QtWidgets.QMainWindow):
             for serial, tile in self.tiles.items():
                 observation = packet['observations'].get(serial)
                 if observation is not None:
-                    tile.detail = f"{len(observation['ids'])}/{self.board.num_points} corners · {packet['coverage']['views'][serial]} poses"
+                    tile.detail = f"{len(observation['ids'])}/{self.board.num_points} · {packet['coverage']['views'][serial]} poses"
                     tile.setToolTip(inspection_advice(observation, packet.get('novel', {}).get(serial, True)))
                     tile.update()
             serials = packet['batch'].serials

@@ -8,10 +8,11 @@ from .session import Session
 
 
 class LiveEngine:
-    def __init__(self, source, board, board_file, output, workers=4, capture_mode='stationary'):
+    def __init__(self, source, board, board_file, output, workers=4, capture_mode='stationary', resume=None):
         if capture_mode not in ('stationary', 'motion'):
             raise ValueError('Capture mode must be stationary or motion')
         self.capture_mode = capture_mode
+        self.resume = resume
         self.source, self.board = source, board
         self.board_file, self.output = board_file, output
         self.workers = workers
@@ -42,13 +43,31 @@ class LiveEngine:
             coverage = Coverage(serials)
             session = Session(self.output, self.board_file, serials,
                               simulated=self.source.__class__.__name__ == 'SimulatedSource',
-                              capture_mode=self.capture_mode)
+                              capture_mode=self.capture_mode, resume=self.resume)
+            validation_coverage = Coverage(serials)
+            if session.samples:
+                # Rebuild diversity/partition state from saved images using the same detector.
+                import cv2
+                from types import SimpleNamespace
+                self.status = 'Restoring saved capture coverage…'
+                for record in session.samples:
+                    if self.stop_event.is_set():
+                        return
+                    observations = {}
+                    for serial in serials:
+                        image = cv2.imread(str(session.directory / record['id'] / f'{serial}.png'), cv2.IMREAD_GRAYSCALE)
+                        if image is None:
+                            raise ValueError(f"Cannot read saved capture {record['id']}/{serial}")
+                        observations[serial] = observe(self.board, SimpleNamespace(image=image))
+                    (coverage if record['role'] == 'training' else validation_coverage).add(observations)
+            sequence_offset = max((r['sequence'] for r in session.samples), default=-1) + 1
             with self.lock:
                 self.coverage, self.session = coverage, session
-                self.validation_coverage = Coverage(serials)
+                self.validation_coverage = validation_coverage
                 self.status = f'{len(serials)} cameras connected'
             while not self.stop_event.is_set():
                 batch = self.source.read()
+                batch.sequence += sequence_offset
                 with self.lock:
                     self.latest_batch = batch
                 self.new_frame.set()

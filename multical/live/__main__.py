@@ -8,6 +8,7 @@ def main():
     parser = argparse.ArgumentParser(description='Standalone live multi-camera calibration and visual guidance')
     parser.add_argument('--boards', default=str(Path(__file__).with_name('default_board.yaml')))
     parser.add_argument('--output', default='live-sessions')
+    parser.add_argument('--resume', help='Continue a saved live session with the same board, cameras and mode')
     parser.add_argument('--seed', help='Converted Captury, multical, or live calibration JSON (metres, native images)')
     parser.add_argument('--capture-mode', choices=['stationary', 'motion'], default='stationary',
                         help='Stationary boards allow different exposures; motion mode enforces strict timing')

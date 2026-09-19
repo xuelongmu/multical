@@ -218,6 +218,24 @@ class InspectionView(QtWidgets.QWidget):
                 p.drawLine(predicted+QtCore.QPointF(0, -3), predicted+QtCore.QPointF(0, 3))
 
 
+class MetricItem(QtWidgets.QTableWidgetItem):
+    """Keep formatted labels while sorting their underlying numeric values."""
+    def __init__(self, text, sort_value):
+        super().__init__(text)
+        self.sort_value = sort_value
+
+    def __lt__(self, other):
+        if not isinstance(other, MetricItem):
+            return super().__lt__(other)
+        if self.sort_value is None or other.sort_value is None:
+            if self.sort_value is other.sort_value:
+                return False
+            table = self.tableWidget()
+            ascending = table is None or table.horizontalHeader().sortIndicatorOrder() == QtCore.Qt.AscendingOrder
+            return (self.sort_value is not None) if ascending else (self.sort_value is None)
+        return self.sort_value < other.sort_value
+
+
 def validation_quality(metric, views=0):
     """Diagnostic pixel-error bands, not physical-accuracy acceptance gates."""
     if metric and metric.get('n', 0) and metric.get('rms') is not None:
@@ -701,6 +719,13 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.metrics = QtWidgets.QTableWidget(0, 10)
         self.metrics.setHorizontalHeaderLabels(['Camera', 'Train poses', 'Coverage', 'Train px', 'RMS px', 'P95 px', 'Checked', 'Val poses', 'Evidence', 'Error'])
         self.metrics.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
+        self.metrics.setSortingEnabled(True)
+        self.metrics.sortItems(0, QtCore.Qt.AscendingOrder)
+        for column, tip in {1: 'Sort by training pose count', 2: 'Sort by image coverage',
+                            3: 'Sort by training RMS', 4: 'Sort by validation RMS', 5: 'Sort by validation P95',
+                            6: 'Sort by successfully checked corner count (numerator)',
+                            7: 'Sort by varied validation poses', 8: 'Sort by independently checked pose count'}.items():
+            self.metrics.horizontalHeaderItem(column).setToolTip(tip + ' · click again to reverse')
         self.metrics.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.metrics.setAlternatingRowColors(True)
         self.metrics.verticalHeader().hide()
@@ -1372,6 +1397,13 @@ class LiveWindow(QtWidgets.QMainWindow):
                     tile.update()
             serials = packet['batch'].serials
             coverage = packet['coverage']
+            current = self.metrics.currentItem()
+            current_camera = self.metrics.item(current.row(), 0).text() if current is not None else None
+            current_column = current.column() if current is not None else 0
+            scroll_y = self.metrics.verticalScrollBar().value()
+            scroll_x = self.metrics.horizontalScrollBar().value()
+            # Sorting during insertion moves partially updated rows between cameras.
+            self.metrics.setSortingEnabled(False)
             self.metrics.setRowCount(len(serials))
             for row, serial in enumerate(serials):
                 fraction = np.count_nonzero(coverage['cells'][serial]) / (GRID[0]*GRID[1])
@@ -1389,12 +1421,24 @@ class LiveWindow(QtWidgets.QMainWindow):
                           '—' if not test or test['p95'] is None else f"{test['p95']:.2f}",
                           '—' if test is None else f"{test['n']}/{test['expected_points']}",
                           str(packet.get('validation_views', {}).get(serial, 0)), evidence, quality]
+                sort_values = [serial, coverage['views'][serial], fraction, train,
+                               (test or {}).get('rms'), (test or {}).get('p95'),
+                               (test or {}).get('n'), packet.get('validation_views', {}).get(serial, 0),
+                               checked_poses, quality]
                 for col, text in enumerate(values):
-                    item = QtWidgets.QTableWidgetItem(text)
+                    item = MetricItem(text, sort_values[col])
                     item.setToolTip(self.rig.camera_status(serial)[1])
                     if col in (4, 5, 9):
                         item.setForeground(QtGui.QColor(color))
                     self.metrics.setItem(row, col, item)
+            self.metrics.setSortingEnabled(True)
+            if current_camera is not None:
+                for row in range(self.metrics.rowCount()):
+                    if self.metrics.item(row, 0).text() == current_camera:
+                        self.metrics.setCurrentCell(row, current_column)
+                        break
+            self.metrics.verticalScrollBar().setValue(scroll_y)
+            self.metrics.horizontalScrollBar().setValue(scroll_x)
             evaluated = (self.result or {}).get('validation', {})
             checked = [m for m in evaluated.values() if m.get('n', 0)]
             n = sum(m['n'] for m in checked)

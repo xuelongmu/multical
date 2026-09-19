@@ -19,6 +19,7 @@ from .metrics import GRID, live_projection
 from .session import write_result
 from .validation_state import geometry_key, save_evaluation, restore_evaluation
 from .sources import PySpinSource, SimulatedSource
+from .recorder import NativeSource, BUSY_STATES
 
 
 ACCENT = '#52dfbc'
@@ -100,7 +101,12 @@ def as_image(pixels, width=900):
     if w > width:
         pixels = cv2.resize(pixels, (width, round(h * width / w)), interpolation=cv2.INTER_AREA)
     pixels = np.ascontiguousarray(pixels)
-    return QtGui.QImage(pixels.data, pixels.shape[1], pixels.shape[0], pixels.strides[0], QtGui.QImage.Format_Grayscale8).copy()
+    format = QtGui.QImage.Format_RGB888 if pixels.ndim == 3 else QtGui.QImage.Format_Grayscale8
+    return QtGui.QImage(pixels.data, pixels.shape[1], pixels.shape[0], pixels.strides[0], format).copy()
+
+
+def display_pixels(frame):
+    return frame.display_image if getattr(frame, 'display_image', None) is not None else frame.image
 
 
 class CameraTile(QtWidgets.QWidget):
@@ -448,6 +454,9 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.evaluated_key = None
         self.last_packet = self.last_batch = None
         self.previews_paused = False
+        self.record_preview_restore = None
+        self.record_finished_key = None
+        self.record_pause_internal = False
         self.selected = None
         self.focus_changed_at = 0.
         self.quad_serials = []
@@ -479,8 +488,9 @@ class LiveWindow(QtWidgets.QMainWindow):
         settings_layout = QtWidgets.QVBoxLayout(settings)
         settings_layout.setContentsMargins(0, 4, 0, 4)
         self.source_choice = QtWidgets.QComboBox()
-        self.source_choice.addItems(['FLIR cameras · PySpin', 'Simulated rig · testing'])
-        self.source_choice.setCurrentIndex(1 if args.demo else 0)
+        self.source_choice.addItems(['FLIR cameras · native recorder', 'Simulated rig · calibration',
+                                     'FLIR cameras · PySpin only', 'Simulated rig · native recorder'])
+        self.source_choice.setCurrentIndex(1 if args.demo else 2 if getattr(args, 'camera_backend', 'native') == 'pyspin' else 0)
         settings_layout.addWidget(self.source_choice)
         self.capture_mode = QtWidgets.QComboBox()
         self.capture_mode.addItem('Stationary board', 'stationary')
@@ -645,6 +655,57 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.wall_title = label('CAMERA WALL · live previews', 'muted')
         wall_header = QtWidgets.QHBoxLayout()
         wall_header.addWidget(self.wall_title, 1)
+        self.record_button = QtWidgets.QPushButton('● Record')
+        self.record_button.setMinimumWidth(94)
+        self.wall_title.setMinimumWidth(0)
+        self.wall_title.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Preferred)
+        self.record_button.setToolTip('Record full-colour camera streams [R]')
+        self.record_button.clicked.connect(self.toggle_recording)
+        self.record_button.setEnabled(False)
+        wall_header.addWidget(self.record_button)
+        self.record_settings = QtWidgets.QToolButton()
+        self.record_settings.setText('⚙')
+        self.record_settings.setAccessibleName('Recording settings')
+        self.record_settings.setToolTip('Recording settings and output folder')
+        self.record_settings.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        recording_menu = QtWidgets.QMenu(self.record_settings)
+        recording_form = QtWidgets.QWidget()
+        recording_layout = QtWidgets.QFormLayout(recording_form)
+        self.record_fps = QtWidgets.QSpinBox()
+        self.record_fps.setRange(1, 60)
+        self.record_fps.setValue(60)
+        recording_layout.addRow('Frames / second', self.record_fps)
+        self.record_seconds = QtWidgets.QSpinBox()
+        self.record_seconds.setRange(1, 120)
+        self.record_seconds.setValue(120)
+        self.record_seconds.setSuffix(' s')
+        recording_layout.addRow('Take limit', self.record_seconds)
+        self.record_quality = QtWidgets.QSpinBox()
+        self.record_quality.setRange(50, 95)
+        self.record_quality.setValue(85)
+        recording_layout.addRow('JPEG quality', self.record_quality)
+        recording_layout.addRow(label('Colour MJPEG · independent frames · 2 s MKV segments', 'muted'))
+        media = Path('/media/zerospace/SABRENT1TB')
+        default_output = str(media / 'MulticalRecordings') if media.is_mount() else str(Path(args.output).resolve().parent / 'recordings')
+        self.record_output = QtWidgets.QLineEdit(getattr(args, 'recordings', None) or self.preferences.value('recording/output', default_output))
+        self.record_output.setMinimumWidth(230)
+        folder_row = QtWidgets.QHBoxLayout()
+        folder_row.addWidget(self.record_output)
+        self.record_folder_button = QtWidgets.QPushButton('…')
+        self.record_folder_button.setFixedWidth(32)
+        self.record_folder_button.setToolTip('Choose recording folder')
+        self.record_folder_button.clicked.connect(self.choose_recording_folder)
+        folder_row.addWidget(self.record_folder_button)
+        recording_layout.addRow('Output', folder_row)
+        self.record_pause_previews = QtWidgets.QCheckBox('Pause previews during takes')
+        self.record_pause_previews.setChecked(True)
+        recording_layout.addRow(self.record_pause_previews)
+        recording_layout.addRow(label('Board analysis pauses during recording. Camera settings stay fixed.', 'muted'))
+        recording_action = QtWidgets.QWidgetAction(recording_menu)
+        recording_action.setDefaultWidget(recording_form)
+        recording_menu.addAction(recording_action)
+        self.record_settings.setMenu(recording_menu)
+        wall_header.addWidget(self.record_settings)
         self.preview_button = QtWidgets.QPushButton('Pause previews')
         self.preview_button.setCheckable(True)
         self.preview_button.setIcon(capture_icon(False))
@@ -768,11 +829,14 @@ class LiveWindow(QtWidgets.QMainWindow):
         footer_row = QtWidgets.QHBoxLayout()
         footer_row.addWidget(self.footer)
         footer_row.addStretch()
+        self.record_status = label('', 'muted')
+        self.record_status.setWordWrap(False)
+        footer_row.addWidget(self.record_status)
         footer_row.addWidget(self.mode_badge)
         outer.addLayout(footer_row)
         self.setCentralWidget(root)
         for key, callback in [('Space', lambda: self.capture('training')), ('V', lambda: self.capture('validation')),
-                              ('C', self.solve), ('P', self.preview_button.toggle)]:
+                              ('C', self.solve), ('P', self.preview_button.toggle), ('R', self.toggle_recording)]:
             shortcut = QtWidgets.QShortcut(QtGui.QKeySequence(key), self)
             shortcut.activated.connect(callback)
         self.timer = QtCore.QTimer(self)
@@ -814,6 +878,8 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.pause_button.setIcon(capture_icon(paused))
 
     def pause_previews(self, paused):
+        if not self.record_pause_internal:
+            self.record_preview_restore = None
         self.previews_paused = paused
         action = 'Resume previews' if paused else 'Pause previews'
         self.preview_button.setText(action)
@@ -830,6 +896,95 @@ class LiveWindow(QtWidgets.QMainWindow):
             self.wall_title.setText('CAMERA WALL · live previews')
             self.inspection_title.setText('BOARD INSPECTION')
         self.refresh()
+
+    def choose_recording_folder(self):
+        path = QtWidgets.QFileDialog.getExistingDirectory(self, 'Recording output folder', self.record_output.text())
+        if path:
+            self.record_output.setText(path)
+
+    def toggle_recording(self):
+        source = self.engine.source if self.engine else None
+        if not isinstance(source, NativeSource) or not self.engine.running() or self.engine.session is None:
+            self.fail('Connect the native recorder to record video.')
+            return
+        try:
+            if source.recording_busy():
+                source.stop_recording()
+                return
+            if self.process is not None or self.pending_session_action is not None:
+                raise ValueError('Finish the calibration operation before recording')
+            if not self.record_output.text().strip():
+                raise ValueError('Choose a recording output folder')
+            source.start_recording(self.record_output.text(), fps=self.record_fps.value(),
+                                   seconds=self.record_seconds.value(), quality=self.record_quality.value(),
+                                   calibration=self.result, session=self.engine.session.directory)
+            with self.engine.lock:
+                self.engine.pending_capture = None
+            self.preferences.setValue('recording/output', self.record_output.text())
+            self.record_finished_key = None
+            self.error_label.hide()
+            if self.record_pause_previews.isChecked() and not self.preview_button.isChecked():
+                self.record_preview_restore = False
+                self.record_pause_internal = True
+                try:
+                    self.preview_button.setChecked(True)
+                finally:
+                    self.record_pause_internal = False
+        except (ValueError, OSError, RuntimeError) as exc:
+            self.fail(str(exc))
+
+    def refresh_recording(self, ready):
+        source = self.engine.source if self.engine else None
+        available = isinstance(source, NativeSource)
+        state = source.recording_status() if available else {'state': 'idle'}
+        phase = state['state']
+        busy = phase in BUSY_STATES
+        self.record_button.setEnabled(available and ready and self.process is None and self.pending_session_action is None)
+        self.record_button.setText('■ Stop' if busy else '● Record')
+        self.record_button.setStyleSheet('color: #ff8b83;' if busy else '')
+        self.record_button.setToolTip('Stop scheduling and save the take [R]' if busy else
+            'Record full-colour streams [R]' if available else 'Select the native recorder camera source to record video')
+        self.record_settings.setEnabled(not busy)
+        if not available:
+            self.record_status.setText('')
+            return False
+        counts = state.get('cameras', {})
+        written = [c['written'] for c in counts.values()]
+        minimum = min(written, default=0)
+        maximum = max(written, default=0)
+        count_text = str(minimum) if minimum == maximum else f'{minimum}–{maximum}'
+        elapsed = min(state.get('scheduled_frames', 0) / max(1, state.get('fps', 60)), self.record_seconds.value())
+        if busy:
+            self.record_status.setText(f'{phase.capitalize()} · {elapsed:.1f}s · {count_text} frames/cam · queue {state.get("raw_queue", 0)}')
+            self.guidance.setText('Recording colour streams…' if phase == 'recording' else
+                                  'Finishing and flushing the take…' if phase == 'draining' else 'Preparing the recorder…')
+        elif phase == 'saved':
+            timing_review = state.get('max_start_spread_us', 0) > 20 or state.get('max_midpoint_spread_us', 0) > 20
+            self.record_status.setText(f'Saved · {count_text} frames/cam' + (' · timing review' if timing_review else ''))
+        elif phase in ('failed', 'cancelled'):
+            self.record_status.setText('Recording failed' if phase == 'failed' else 'Recording cancelled')
+        else:
+            self.record_status.setText('Recorder ready')
+        lines = [state.get('directory', ''), state.get('error', ''),
+                 f"Max start spread: {state.get('max_start_spread_us', 0):.1f} µs; midpoint spread: {state.get('max_midpoint_spread_us', 0):.1f} µs"]
+        lines.extend(f"{s}: {c['received']} received / {c['written']} written" for s, c in counts.items())
+        self.record_status.setToolTip('\n'.join(x for x in lines if x))
+        if phase in ('saved', 'failed', 'cancelled'):
+            key = (state.get('directory'), phase, state.get('error'))
+            if key != self.record_finished_key:
+                self.record_finished_key = key
+                if phase == 'failed':
+                    self.fail('Recording: ' + state.get('error', 'The take is incomplete'))
+                if self.record_preview_restore is not None:
+                    restore, self.record_preview_restore = self.record_preview_restore, None
+                    self.record_pause_internal = True
+                    try:
+                        self.preview_button.setChecked(restore)
+                    finally:
+                        self.record_pause_internal = False
+                if self.sounds.isChecked():
+                    self.capture_sounds.play('training' if phase == 'saved' else 'attention')
+        return busy
 
     def switch_session(self, configure):
         self.cancel_solve()
@@ -962,9 +1117,9 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.metrics.setRowCount(0)
         self.overlaps.setRowCount(0)
         self.inspection.image = None
-        demo = self.source_choice.currentIndex() == 1
+        demo = self.source_choice.currentIndex() in (1, 3)
         capture_mode = self.capture_mode.currentData()
-        if demo:
+        if self.source_choice.currentIndex() == 1:
             source = SimulatedSource(self.board, self.count.value(), fps=self.args.fps)
         else:
             serials = tuple(s.strip() for s in self.serials.text().split(',') if s.strip())
@@ -979,15 +1134,21 @@ class LiveWindow(QtWidgets.QMainWindow):
             except ValueError:
                 self.fail('Enter a positive exposure in microseconds and a finite gain in dB, or leave them blank.')
                 return
-            source = PySpinSource(serials, self.count.value(), fps=self.args.fps, sdk_path=self.args.sdk_path,
-                                  exposure_us=exposure, gain_db=gain, capture_mode=capture_mode)
+            if self.source_choice.currentIndex() == 2:
+                source = PySpinSource(serials, self.count.value(), fps=self.args.fps, sdk_path=self.args.sdk_path,
+                                      exposure_us=exposure, gain_db=gain, capture_mode=capture_mode)
+            else:
+                source = NativeSource(serials, self.count.value(), fps=self.args.fps,
+                                      exposure_us=exposure, gain_db=gain, capture_mode=capture_mode,
+                                      simulated=self.source_choice.currentIndex() == 3)
         self.engine = LiveEngine(source, self.board, self.board_file, self.args.output, self.args.workers,
                                  capture_mode=capture_mode, resume=getattr(self.args, 'resume', None))
         self.engine.auto_capture = self.auto.isChecked()
         self.engine.auto_capture_role = self.auto_role.currentData()
         self.engine.set_paused(self.pause_button.isChecked())
         self.engine.start()
-        self.mode_badge.setText('SIMULATION · generated images' if demo else 'LIVE · direct PySpin')
+        self.mode_badge.setText('SIMULATION · generated images' if demo else
+                               'LIVE · native recorder' if isinstance(source, NativeSource) else 'LIVE · direct PySpin')
 
     def set_sounds(self, enabled):
         self.sounds.setIcon(sound_icon(enabled))
@@ -1093,7 +1254,7 @@ class LiveWindow(QtWidgets.QMainWindow):
             count = len(obs['ids']) if obs else 0
             self.quad_labels[i].setToolTip(inspection_advice(obs, packet.get('novel', {}).get(serial, True)))
             self.quad_labels[i].setText(f"{serial} · {count}/{self.board.num_points} · {packet['coverage']['views'][serial]} poses\n{ranked.get(serial, 'Scout: overlap not established')}")
-            view.image = as_image(frame.image, 640) if frame else None
+            view.image = as_image(display_pixels(frame), 640) if frame else None
             view.observation = dict(obs, image_size=frame.image.shape[1::-1]) if obs and frame else None
             view.cells = packet['coverage']['cells'][serial]
             view.prediction = (getattr(self, 'prediction', None) or {}).get('predictions', {}).get(serial)
@@ -1169,7 +1330,7 @@ class LiveWindow(QtWidgets.QMainWindow):
             self.inspection_advice.setText(inspection_advice(None, False))
             self.inspection.update()
             return
-        self.inspection.image = as_image(frame.image)
+        self.inspection.image = as_image(display_pixels(frame))
         self.inspection.observation = dict(observation, image_size=frame.image.shape[1::-1])
         self.inspection.cells = packet['coverage']['cells'][serial]
         self.inspection.prediction = None
@@ -1192,6 +1353,7 @@ class LiveWindow(QtWidgets.QMainWindow):
 
     def auto_evaluate(self, session):
         if (self.closing or self.pending_session_action is not None or self.process is not None
+                or (self.engine and self.engine.recording_busy())
                 or (self.seed is not None and not self.seed_checked)):
             return
         records = list(session.samples)
@@ -1219,6 +1381,8 @@ class LiveWindow(QtWidgets.QMainWindow):
 
     def solve(self, evaluate_only=False):
         if self.process is not None or not self.engine or not self.engine.session:
+            return
+        if self.engine.recording_busy():
             return
         session = self.engine.session
         records = list(session.samples)
@@ -1328,18 +1492,20 @@ class LiveWindow(QtWidgets.QMainWindow):
             self.close()
             return
         if self.engine is None:
+            self.refresh_recording(False)
             return
         state = self.engine.snapshot()
+        video_active = self.engine.recording_busy()
         self.notify_capture(state.get('capture_event'))
         batch_for_audio = state.get('batch')
         blocked = bool(state['error']) or bool(batch_for_audio and batch_for_audio.problems(capture_mode=self.engine.capture_mode))
         audible = self.attention_cue.update(blocked, time.monotonic(),
-            active=not self.closing and not switching and not state['paused'] and (ready or bool(state['error'])),
+            active=not video_active and not self.closing and not switching and not state['paused'] and (ready or bool(state['error'])),
             fatal=bool(state['error']))
         if audible and self.sounds.isChecked():
             self.capture_sounds.play('attention')
         hint = self.guidance_cue.update((state.get('packet') or {}).get('guidance_cue'), time.monotonic(),
-            active=ready and not blocked and not switching and not state['paused'] and not self.closing
+            active=not video_active and ready and not blocked and not switching and not state['paused'] and not self.closing
                    and time.monotonic() - self.last_capture_sound_at >= 3.)
         if hint and self.sounds.isChecked():
             self.capture_sounds.play(hint)
@@ -1383,7 +1549,7 @@ class LiveWindow(QtWidgets.QMainWindow):
                 frame = batch.frames.get(serial)
                 tile.missing = frame is None
                 if frame:
-                    tile.image = as_image(frame.image, 360)
+                    tile.image = as_image(display_pixels(frame), 360)
                     if packet is None:
                         tile.detail = 'Waiting for detection'
                 else:
@@ -1504,6 +1670,11 @@ class LiveWindow(QtWidgets.QMainWindow):
             self.guidance.setText('Switching session…')
         if not running:
             self.mode_badge.setText('DISCONNECTED · retained session')
+        recording = self.refresh_recording(ready)
+        if recording:
+            for button in (self.training_button, self.validation_button, self.solve_button, self.new_button,
+                           self.load_session_button, self.seed_button, self.start_button, self.pause_button):
+                button.setEnabled(False)
 
     def closeEvent(self, event):
         self.cancel_solve()

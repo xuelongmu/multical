@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "date_utc": "2026-09-19",
+  "source": "Native live recorder, 25 physical cameras, Q85, 1440x1080, RTX A6000, SABRENT exFAT drive",
+  "hardware": [
+    {
+      "state": "saved",
+      "fps": 60,
+      "scheduled_frames": 900,
+      "planned_frames": 900,
+      "complete": true,
+      "jpeg_bytes_written": 1306123699,
+      "max_raw_queue": 8,
+      "max_encoded_queue_bytes": 37438544,
+      "encoded_queue_capacity_bytes": 1073741824,
+      "max_start_spread_us": 8.536,
+      "max_midpoint_spread_us": 256.76,
+      "stop_reason": "frame_limit",
+      "verification": {
+        "directory": "/media/zerospace/SABRENT1TB/MulticalRecordings/qualification/take-20260919T060123Z-b50167e5",
+        "integrity": "passed",
+        "decoded": true,
+        "decoded_frames": 22500,
+        "cameras": 25,
+        "frames_per_camera": 900,
+        "fps": 60,
+        "seconds": 15.0,
+        "segments": 200,
+        "max_start_spread_us": 8.536,
+        "max_midpoint_spread_us": 256.76,
+        "simulated": false
+      },
+      "exposure_us_range": [
+        1102.0,
+        1600.0
+      ]
+    },
+    {
+      "state": "saved",
+      "fps": 60,
+      "scheduled_frames": 7200,
+      "planned_frames": 7200,
+      "complete": true,
+      "jpeg_bytes_written": 10468907380,
+      "max_raw_queue": 23,
+      "max_encoded_queue_bytes": 37755970,
+      "encoded_queue_capacity_bytes": 1073741824,
+      "max_start_spread_us": 9.12,
+      "max_midpoint_spread_us": 258.12,
+      "stop_reason": "frame_limit",
+      "verification": {
+        "directory": "/media/zerospace/SABRENT1TB/MulticalRecordings/qualification/take-20260919T060525Z-50592511",
+        "integrity": "passed",
+        "decoded": true,
+        "decoded_frames": 180000,
+        "cameras": 25,
+        "frames_per_camera": 7200,
+        "fps": 60,
+        "seconds": 120.0,
+        "segments": 1500,
+        "max_start_spread_us": 9.12,
+        "max_midpoint_spread_us": 258.12,
+        "simulated": false
+      },
+      "exposure_us_range": [
+        1102.0,
+        1600.0
+      ]
+    },
+    {
+      "state": "saved",
+      "fps": 60,
+      "scheduled_frames": 7200,
+      "planned_frames": 7200,
+      "complete": true,
+      "jpeg_bytes_written": 10422818074,
+      "max_raw_queue": 100,
+      "max_encoded_queue_bytes": 35297500,
+      "encoded_queue_capacity_bytes": 1073741824,
+      "max_start_spread_us": 8.808,
+      "max_midpoint_spread_us": 257.432,
+      "stop_reason": "frame_limit",
+      "verification": {
+        "directory": "/media/zerospace/SABRENT1TB/MulticalRecordings/take-20260919T061307Z-ff89a155",
+        "integrity": "passed",
+        "decoded": true,
+        "decoded_frames": 180000,
+        "cameras": 25,
+        "frames_per_camera": 7200,
+        "fps": 60,
+        "seconds": 120.0,
+        "segments": 1500,
+        "max_start_spread_us": 8.808,
+        "max_midpoint_spread_us": 257.432,
+        "simulated": false
+      },
+      "controller": "Multical Live Qt UI, R shortcut, previews paused automatically",
+      "calibration_snapshot_verified": true,
+      "exposure_us_range": [
+        1102.0,
+        1600.0
+      ]
+    }
+  ],
+  "limits": [
+    "Dim, mostly static stage; not a moving/noisy worst-case image workload",
+    "Two full-duration runs including the Qt UI; not a multi-hour soak test",
+    "One earlier UI take failed explicitly during a period of GPU saturation; a separate Python CUDA workload was seen in subsequent monitoring",
+    "Exposure values preserved; midpoint spread is flagged for timing review"
+  ]
+}

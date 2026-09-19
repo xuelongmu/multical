@@ -21,6 +21,7 @@ class Frame:
     exposure_us: float
     gain_db: float = 0.0
     settings: dict = field(default_factory=dict)
+    display_image: np.ndarray = None
 
     @property
     def start_ns(self):

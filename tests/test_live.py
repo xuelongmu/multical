@@ -275,7 +275,7 @@ class CoverageAndSessionTests(unittest.TestCase):
     def test_auto_validation_requires_shared_steady_novel_nontraining_pose(self):
         from multical.live.engine import LiveEngine
         packet = self.packet()
-        engine = LiveEngine(Mock(), self.board, BOARD, '/tmp/unused')
+        engine = LiveEngine(Mock(recording_busy=Mock(return_value=False), simulated=False), self.board, BOARD, '/tmp/unused')
         engine.coverage = Coverage(packet['batch'].serials)
         engine.validation_coverage = Coverage(packet['batch'].serials)
         engine.auto_capture = True
@@ -297,7 +297,7 @@ class CoverageAndSessionTests(unittest.TestCase):
 
     def test_pause_clears_queued_capture_and_blocks_manual_requests(self):
         from multical.live.engine import LiveEngine
-        engine = LiveEngine(Mock(), self.board, BOARD, '/tmp/unused')
+        engine = LiveEngine(Mock(recording_busy=Mock(return_value=False), simulated=False), self.board, BOARD, '/tmp/unused')
         engine.capture('training')
         engine.set_paused(True)
         self.assertIsNone(engine.pending_capture)
@@ -315,7 +315,7 @@ class CoverageAndSessionTests(unittest.TestCase):
             session = Session(directory, BOARD, packet['batch'].serials)
             session.add(packet, 'training')
             original = (session.directory / '000000/SIM-01.png').read_bytes()
-            source = Mock()
+            source = Mock(recording_busy=Mock(return_value=False), simulated=False)
             source.open.return_value = packet['batch'].serials
             engine = LiveEngine(source, self.board, BOARD, directory, resume=session.directory)
             fresh = self.packet()

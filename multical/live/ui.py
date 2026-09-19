@@ -158,15 +158,27 @@ class InspectionView(QtWidgets.QWidget):
         self.update()
 
     def mousePressEvent(self, event):
-        self.drag = event.pos()
+        self.drag = self.press_pos = event.pos()
 
     def mouseMoveEvent(self, event):
+        if self.drag is None:
+            serial = next((s for s, point in self.hit_points.items()
+                           if (point - QtCore.QPointF(event.pos())).manhattanLength() < 14), None)
+            if serial:
+                QtWidgets.QToolTip.showText(event.globalPos(), self.camera_status(serial)[1], self)
+            else:
+                QtWidgets.QToolTip.hideText()
         if self.drag is not None:
             self.pan += QtCore.QPointF(event.pos() - self.drag)
             self.drag = event.pos()
             self.update()
 
     def mouseReleaseEvent(self, event):
+        if self.drag is not None and (event.pos() - self.press_pos).manhattanLength() < 4:
+            serial = next((s for s, point in self.hit_points.items()
+                           if (point - QtCore.QPointF(event.pos())).manhattanLength() < 14), None)
+            if serial:
+                self.camera_selected.emit(serial)
         self.drag = None
 
     def mouseDoubleClickEvent(self, event):
@@ -219,12 +231,51 @@ class InspectionView(QtWidgets.QWidget):
 
 class RigView(QtWidgets.QWidget):
     """Dependency-free orbitable projection of calibrated camera centres and poses."""
+    camera_selected = QtCore.Signal(str)
+
     def __init__(self):
         super().__init__()
         self.result = self.target = None
-        self.yaw, self.pitch, self.zoom = -.55, .35, 1.0
+        self.validation_views, self.observations, self.hit_points = {}, {}, {}
         self.drag = None
-        self.setMinimumSize(280, 140)
+        self.setMouseTracking(True)
+        self.setMinimumSize(280, 170)
+        self.reset_button = QtWidgets.QToolButton(self)
+        self.reset_button.setText('↺')
+        self.reset_button.setToolTip('Reset to isometric view (fit all cameras)')
+        self.reset_button.setAccessibleName('Reset isometric view')
+        self.reset_button.clicked.connect(self.reset_view)
+        self.reset_view()
+
+    def reset_view(self):
+        self.yaw, self.pitch, self.zoom = -math.pi / 4, math.asin(1 / math.sqrt(3)), 1.0
+        self.drag = None
+        self.update()
+
+    def resizeEvent(self, event):
+        self.reset_button.setGeometry(self.width()-36, 4, 28, 26)
+        super().resizeEvent(event)
+
+    def camera_status(self, serial):
+        views = self.validation_views.get(serial, 0)
+        metric = (self.result or {}).get('validation', {}).get(serial, {})
+        n, failed = metric.get('n', 0), metric.get('failed_points', 0)
+        if n:
+            color, status = '#69bafa', 'Evaluated (not an accuracy pass)'
+        elif failed:
+            color, status = '#ee8d86', 'Could not independently evaluate'
+        elif views:
+            color, status = '#ffb45f', 'Captured; awaiting evaluation'
+        else:
+            color, status = '#888888', 'No validation poses'
+        detail = f'{serial} · {status}\n{views} varied validation poses in this session'
+        if n:
+            detail += f"\nLast evaluation: {metric['rms']:.2f} px RMS · {n} corners · {failed} failed"
+            detail += '\nNew captures require another evaluation.'
+        elif failed:
+            detail += f'\n{failed} corners lacked an independent prediction'
+        detail += '\nLabels show last four serial digits; hover shows full serial.\nArrow: camera viewing direction · ring: board visible now\nClick to inspect camera; drag to orbit; scroll to zoom'
+        return color, detail
 
     def mousePressEvent(self, event):
         self.drag = event.pos()
@@ -260,7 +311,9 @@ class RigView(QtWidgets.QWidget):
         span = max(float(np.ptp(points, axis=0).max()), .5)
         cy, sy, cp, sp = math.cos(self.yaw), math.sin(self.yaw), math.cos(self.pitch), math.sin(self.pitch)
         rotation = np.array([[cy, 0, sy], [sp*sy, cp, -sp*cy], [-cp*sy, sp, cp*cy]])
-        scale = min(self.width(), self.height()) * .7 / span * self.zoom
+        projected_extent = np.maximum(np.ptp((points-centre) @ rotation.T, axis=0), .5)
+        scale = min(max(self.width()-110, 60) / projected_extent[0],
+                    max(self.height()-100, 40) / projected_extent[1]) * .85 * self.zoom
         def project(point):
             transformed = rotation @ (point-centre)
             return QtCore.QPointF(self.width()/2 + transformed[0]*scale, self.height()/2 + transformed[1]*scale)
@@ -271,14 +324,29 @@ class RigView(QtWidgets.QWidget):
         for target in targets:
             p.setPen(QtGui.QColor('#aaaaaa'))
             p.drawEllipse(project(target), 2, 2)
+        self.hit_points = {}
         for serial, pos in centres.items():
-            p.setPen(QtGui.QPen(QtGui.QColor(ACCENT), 2))
+            color, _ = self.camera_status(serial)
+            p.setPen(QtGui.QPen(QtGui.QColor(color), 2))
             at = project(pos)
+            self.hit_points[serial] = at
             direction = poses[serial][:3, :3].T @ np.array([0, 0, span*.12])
-            p.drawLine(at, project(pos+direction))
-            p.setBrush(QtGui.QColor(ACCENT))
+            tip = project(pos+direction)
+            p.drawLine(at, tip)
+            delta = tip-at
+            length = math.hypot(delta.x(), delta.y())
+            if length > 7:
+                unit = delta / length
+                side = QtCore.QPointF(-unit.y(), unit.x())
+                p.drawLine(tip, tip-unit*5+side*3)
+                p.drawLine(tip, tip-unit*5-side*3)
+            p.setBrush(QtGui.QColor(color))
             p.drawEllipse(at, 4, 4)
-            p.drawText(at+QtCore.QPointF(6, -6), serial)
+            p.drawText(at+QtCore.QPointF(6, -6), serial[-4:])
+            if self.observations.get(serial, {}).get('usable'):
+                p.setBrush(QtCore.Qt.NoBrush)
+                p.setPen(QtGui.QPen(QtGui.QColor(ACCENT), 2))
+                p.drawEllipse(at, 8, 8)
         if self.target is not None:
             world = self.target['world_target']
             p.setPen(QtGui.QPen(QtGui.QColor('#ffb45f'), 3))
@@ -286,7 +354,16 @@ class RigView(QtWidgets.QWidget):
             p.drawEllipse(project(pos), 7, 7)
             p.drawLine(project(pos), project(pos + world[:3, 2] * span*.15))
         p.setPen(QtGui.QColor('#aaaaaa'))
-        p.drawText(12, 20, f'Calibration world frame · extent {span:.2f} m · drag to orbit, scroll to zoom')
+        missing = sum(self.camera_status(s)[0] == '#888888' for s in poses)
+        p.drawText(12, 20, f'World · {missing}/{len(poses)} no poses')
+        x, y = 12, self.height() - (28 if self.width() < 380 else 10)
+        for color, title in [('#888888', 'No poses'), ('#ffb45f', 'Pending'), ('#69bafa', 'Evaluated'), ('#ee8d86', 'Failed')]:
+            p.setPen(QtGui.QColor(color))
+            width = p.fontMetrics().horizontalAdvance('● ' + title) + 12
+            if x + width > self.width():
+                x, y = 12, y + 18
+            p.drawText(x, y, '● ' + title)
+            x += width
 
 
 class LiveWindow(QtWidgets.QMainWindow):
@@ -570,6 +647,7 @@ class LiveWindow(QtWidgets.QMainWindow):
         upper.setSizes([650, 550])
         lower = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         self.rig = RigView()
+        self.rig.camera_selected.connect(self.select)
         if self.seed:
             self.result = self.rig.result = self.seed
             self.solve_status.setText('Seed loaded · native images required. Capture validation to check it, or training to refine poses with fixed lenses.')
@@ -757,6 +835,9 @@ class LiveWindow(QtWidgets.QMainWindow):
         self.cancel_solve()
         self.result = self.rig.result = self.seed
         self.rig.target = None
+        self.rig.validation_views = {}
+        self.rig.observations = {}
+        self.rig.reset_view()
         self.seed_checked = False
         self.last_packet = self.last_batch = None
         for tile in self.tiles.values():
@@ -1170,6 +1251,8 @@ class LiveWindow(QtWidgets.QMainWindow):
                 except cv2.error:
                     pass
             self.rig.target = self.prediction
+            self.rig.validation_views = packet.get('validation_views', {})
+            self.rig.observations = packet['observations']
             self.rig.update()
             self.update_focus(packet)
             self.update_inspection(packet)

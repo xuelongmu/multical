@@ -417,7 +417,8 @@ class RigView(QtWidgets.QWidget):
             p.setPen(QtGui.QPen(QtGui.QColor('#ffb45f'), 3))
             pos = world[:3, 3]
             p.drawEllipse(project(pos), 7, 7)
-            p.drawLine(project(pos), project(pos + world[:3, 2] * span*.15))
+            # The facing indicator follows the board's negative local Z axis.
+            p.drawLine(project(pos), project(pos - world[:3, 2] * span*.15))
         p.setPen(QtGui.QColor('#aaaaaa'))
         missing = sum(self.camera_status(s)[0] == '#888888' for s in poses)
         p.drawText(12, 20, f'World · {missing}/{len(poses)} no poses')
